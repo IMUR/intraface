@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Model files — defensive. Models live in ~/.intraface/models/, never in-repo.
+*.gguf
+models/
+
+# TypeScript build artifacts
+*.tsbuildinfo
+dist/
+
+# Logs
+*.log
+
+# Runtime state — lives in ~/.intraface/state/, never here
+state/

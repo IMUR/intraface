@@ -1,0 +1,9 @@
+{
+  "name": "intraface",
+  "version": "0.1.0",
+  "description": "Local-specialist harness for prtr. See docs/charter.md.",
+  "type": "module",
+  "scripts": {
+    "test": "echo 'No tests yet' && exit 1"
+  }
+}

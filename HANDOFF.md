@@ -1,118 +1,109 @@
 # Intraface — Handoff
 
-**Date:** 2026-07-06
+**Date:** 2026-07-07
 **For:** Next agent or session picking up Intraface work
-**Status:** Scaffold laid. No code yet. Critical decisions still open.
+**Status:** First charter-compliant Unit exists on disk and in repo. Not yet verified working end-to-end. Several follow-ups queued.
 
 ---
 
-## What exists right now
+## What exists
+
+### Repo: `~/prj/intraface/` (Forgejo: `rtr/intraface`, branch `main`)
 
 ```
-~/prj/intraface/         (NEW — created today)
+~/prj/intraface/
+├── HANDOFF.md                              this file
+├── engines.toml                            pinned engine commits + roles
 ├── docs/
-│   └── charter.md       # Intraface charter, clean (stale refs fixed)
-├── lib/                 # empty — spawn-llama.ts lands here
-├── units/
-│   └── summarize/       # empty — first Unit code lands here
-└── HANDOFF.md           # this file
-
-~/.intraface/            (NEW — created today)
-├── models/
-│   └── lfm2.5-1.2b-instruct/   # empty — model moves here in Phase 2
-└── state/                      # empty — runtime state (PIDs, etc.)
-
-~/prj/prtr-config/
-├── intraface-charter.md                  # original (still here; cleaned copy is in intraface/docs/)
-└── docs/
-    ├── features.md                       # specialist backlog (pre-charter vocab)
-    ├── oversight-agent-prd.md            # oversight behavior spec
-    └── intraface-restructure-plan.md     # full execution plan (798 lines)
+│   ├── charter.md                          conceptual model + five tests
+│   ├── features.md                         Unit backlog (pre-charter vocab)
+│   ├── glm-migration.md                    GLM→intraface-custody runbook
+│   └── decisions/
+│       ├── 0001-core-unit-model-custody.md
+│       └── 0002-dev-tree-is-runtime-target.md
+├── extensions/
+│   └── pi/
+│       └── extract.ts                      Pi shim (NOT yet deployed)
+├── lib/                                    empty — runLlama is inlined for now
+└── units/
+    └── extract/
+        ├── extract.ts                      the Unit (path-param, provenance)
+        ├── schema.ts                       TS types + doc-only JSON Schema
+        └── grammar.gbnf                    runtime constraint (-j broken)
 ```
 
-## What doesn't exist yet (despite mentions elsewhere)
+### Runtime: `~/.intraface/`
 
-**No code has been ported.** The old `~/prj/subagent-summarize/` is untouched. The new `~/prj/intraface/{lib,units}/` directories are empty.
+```
+~/.intraface/
+├── models/
+│   ├── README.md
+│   ├── core/        empty — GLM migration is a queued follow-up
+│   │   └── README.md                       states the pending plan
+│   └── unit/
+│       ├── README.md
+│       └── lfm2.5-1.2b-instruct/
+│           └── LFM2.5-1.2B-Instruct-Q4_K_M.gguf   (731M, verified)
+└── state/                                  empty — runtime PIDs go here
+```
 
-**No models have moved.** All four model files are still at `~/prj/subagent-summarize/models/`.
+## State of the world (verified 2026-07-07)
 
-**No Pi extension swap.** The deployed extension at `~/.pi/agent/extensions/summarize.ts` is unchanged and still imports from `/home/prtr/prj/subagent-summarize/summarize.ts`.
+- **First charter-compliant Unit (`extract`) exists on disk.** Fails Test 1 by zero (path-param input, not source-text); fails Test 2 by zero (per-item quote + computed span + verified boolean).
+- **GLM is live** at PID 634777, `127.0.0.1:7712`, manually launched (no systemd), cwd `~/prj/ik_llama.cpp`. Untouched.
+- **`llama-cli` constraint mechanism is `--grammar-file`, not `-j`/`--json-schema`.** Mainline build 9861 (`c8ae9a750`) throws on sampler init for `-j`. Documented in `engines.toml [defects.json_schema]` and `units/extract/schema.ts` header. Revisit when upstream fixes.
+- **Old work archived.** `~/prj/subagent-summarize/` moved to `~/prj/archive/subagent-summarize/`. The 3 rejected model files (Q4/Q5 Transcript, 8B A1B) were deleted; only the surviving LFM2.5 was migrated to intraface custody. The Forgejo `rtr/subagent-summarize` remote is left as a cold backup.
+- **Pi extension not yet swapped.** `~/.pi/agent/extensions/summarize.ts` is still the old v1 (imports from the archived dir — that import is now broken). The new shim at `extensions/pi/extract.ts` has not been deployed. Swapping them is a follow-up gated on the smoke test below.
 
-## The charter's first workout
+## What to read first (in order)
 
-The charter was applied as a review framework to the restructure plan. It caught real defects:
-
-1. The on-disk `summarize.ts` code fails **Test 1 (attention)** — `source: string` parameter puts full bulk through Core context twice.
-2. The on-disk `summary.gbnf` grammar fails **Test 2 (proof)** — enforces structure but no provenance (no quote/span/source fields).
-3. The plan's Phase 7 attempt to "port the spawn helper only" was caught as incoherent — it actually re-implemented the broken summarize function under new authorship.
-
-So the right move is not "port and refactor later." The right move is **build the first charter-compliant Unit from scratch** at `units/extract/` (or `units/summarize/` — naming TBD) with the right shape from day one.
-
-## What the first Unit needs (the real work)
-
-Per charter Tests 1 and 2:
-
-- **Path parameter, not source text.** `parameters: Type.Object({ source_path: Type.String(...) })`. The Unit reads the file itself; the bulk never transits Core context.
-- **Schema-with-provenance output.** Not just `{summary, key_points, ...}` but `{text, quote, span: [start,end], source, hash, moment, executor}` — output that can be verified by string-match against the source without re-reading the source.
-- **Domain primer in prompt.** "This is the Reactor (rtr) cluster: prtr/drtr/crtr/trtr are nodes, GLM is the orchestrator LLM..." — kills the "RTR = Remote Transfer Service" hallucination class.
-- **Grammar that matches the schema.** The current `summary.gbnf` enforces the v1 shape without provenance. A new grammar is needed that enforces the v2 shape.
-
-## Critical verified facts (don't re-litigate)
-
-These were checked against live state on 2026-07-06:
-
-- **`-j` / `--json-schema` is broken** on mainline llama.cpp build `9861 (c8ae9a750)`. Sampler init throws `Failed to initialize samplers: std::exception`. Grammar file approach (`--grammar-file *.gbnf`) is the only working constraint mechanism. Revisit when mainline updates.
-- **`-st` / `--single-turn` is the correct flag** for non-interactive llama-cli runs. Not `--simple-io` (display-only), not `--no-conversation` alone (still loops).
-- **`spawn("llama-cli", args)` with argv array** is the correct invocation pattern. Never `spawn("sh", ["-c", command])` — that caused three orphan processes this session via shell-mangled prompts.
-- **Engine versions** (from `--version`): mainline `9861 (c8ae9a750)`, ik_llama `4681 (86d8e9a1)`.
-- **Model file sizes** (from `stat -c %s`): LFM2.5-1.2B-Instruct-Q4_K_M is 730,895,168 bytes; GLM-4.7-Flash-Q8_0 is 31,842,799,488 bytes.
-- **GLM launch line** captured from `/proc/634777/cmdline`: see plan Phase 6 for the full flag list.
-
-## Open decisions (need user input before execution)
-
-1. **Tree shape inside `units/`.** Folder-per-Unit (recommended per charter custody) vs file-type grouping. Currently laid out for folder-per-Unit. Lockable by either proceeding as-is or renaming.
-
-2. **What to do with `~/prj/subagent-summarize/`** (the old working dir). Its git repo is pushed to `rtr/subagent-summarize` on Forgejo with two commits. Three options: delete repo + dir; rename repo + re-init; leave alone. User's call.
-
-3. **The "Phase A files" question.** A parallel Claude session claims to have produced charter-compliant code (extract.ts, schema.ts, etc.) with path-parameter, provenance schema, and domain primer. **I have not seen these files.** If they exist in that session's outputs, paste them into the next session and they land at `units/extract/`. If they don't exist, the first Unit gets built fresh.
-
-## What the previous oversight session got wrong
-
-Naming these so the next session doesn't repeat them:
-
-1. **The original restructure plan proposed porting the broken `summarize.ts` as an "interim shim."** That was incoherent — porting charter-violating code into a clean home while labeling it interim is the anti-pattern the charter exists to prevent.
-2. **The plan's registry files had `9_000_000_000 # approx` for GLM size** next to `verified = "2026-07-06"`. Actual size is 31.8 GB. The 3.5× error was caught by the charter's D1 (cite or retract) applied to the plan itself.
-3. **The plan originally used a symlink for the deployed extension.** Node's module resolver dereferences symlinks, so `typebox` would have failed to resolve. Use a real-file shim with absolute imports instead.
-
-## What to read first
-
-In order:
-
-1. `docs/charter.md` (in this repo) — the conceptual model and five tests
-2. `~/prj/prtr-config/docs/intraface-restructure-plan.md` — full execution plan with phases, but **read critically** — Phase 7's "interim shim" approach is wrong per the above
-3. `~/prtr/prtr-config/docs/oversight-agent-prd.md` — oversight behavior (relevant if you're operating as oversight)
-4. `~/prj/prtr-config/docs/features.md` — specialist backlog (uses pre-charter vocab: "specialist" = "Unit")
+1. `docs/charter.md` — the conceptual model and five tests.
+2. `docs/decisions/0001-core-unit-model-custody.md` — why `models/{core,unit}/`.
+3. `docs/decisions/0002-dev-tree-is-runtime-target.md` — why the dev tree IS the runtime target, and when to revisit that.
+4. `docs/glm-migration.md` — runbook for moving GLM into intraface custody.
 
 ## Smallest next step
 
-If you want to make progress without committing to the full restructure:
+**Smoke-test the extract Unit before any deployment or commit-into-Pi.** Run via CLI to bypass Pi:
 
-1. **Write `lib/spawn-llama.ts`** — the verified subprocess helper. This is charter-neutral (just plumbing) and unblocks any Unit work. See plan Phase 4 for the code.
-2. **Stop.** Don't port the summarize function. Don't write the extension shim yet. Get the spawn helper right, then design the first Unit against the charter from scratch.
+```bash
+cd ~/prj/intraface/units/extract && \
+  node --experimental-strip-types extract.ts \
+    /home/prtr/prj/intraface/HANDOFF.md 1 50
+```
 
-That's the minimal forward motion that doesn't carry charter debt.
+The smoke test exercises: `llama-cli` on PATH, model loads from `~/.intraface/`, grammar-file enforcement, JSON parse, quote-location verification. Until this passes, "exists on disk" does not mean "works."
 
-## Verification recipes (from oversight PRD, repeated here for convenience)
+**If smoke test passes:**
 
-- Process state: `Read /proc/<pid>/status` (text), `Read /proc/<pid>/io` (text, wchar = output volume)
-- Cmdline: `/proc/<pid>/cmdline` is binary NUL-separated. Decode: `tr '\0' ' ' < /proc/<pid>/cmdline`
-- Service health: `ss -tlnp | rg ':<port>'` (real shell, not sandbox)
-- Sandbox limitation: Cursor's sandbox kills `ls /proc`, `ps`, most piped commands. Bare `echo` works. When blocked, ask the user.
+1. Deploy the new shim: `cp ~/prj/intraface/extensions/pi/extract.ts ~/.pi/agent/extensions/extract.ts`
+2. Remove the broken old one: `rm ~/.pi/agent/extensions/summarize.ts`
+3. Restart Pi.
+
+**If smoke test fails:** the failure mode tells you what to fix (PATH, grammar path, model path, or model output shape). Common-cases checklist is in `extract.ts` header comments.
+
+## Critical verified facts (don't re-litigate)
+
+- **`-j` / `--json-schema` is broken** on mainline llama.cpp `9861 (c8ae9a750)`. `--grammar-file *.gbnf` is the runtime mechanism.
+- **`-st` / `--single-turn`** is the correct flag for non-interactive `llama-cli`. Not `--simple-io`, not `--no-conversation` alone.
+- **`spawn("llama-cli", args)` with argv array** — never `spawn("sh", ["-c", ...])`. The latter caused three orphan processes earlier in the project history.
+- **Engine versions** (from `--version`, captured in `engines.toml`): mainline `9861 (c8ae9a750)` for Units, ik_llama `4681 (86d8e9a1)` for the Core.
+- **GPU discipline.** Units run with `CUDA_VISIBLE_DEVICES=""` to keep them off the GPU the Core is saturating (see `extract.ts` line where `spawn()` env is constructed).
+
+## Open follow-ups
+
+1. **Smoke-test `extract`** (the smallest next step above). Gated nothing; just needs to run.
+2. **Deploy Pi shim** once smoke test passes.
+3. **GLM migration** into `~/.intraface/models/core/`. Runbook at `docs/glm-migration.md`. High priority but service-disruptive — schedule a window.
+4. **Factor `runLlama()` into `lib/spawn-llama.ts`** when a second Unit exists. Charter Test 5 custody argument; not needed at N=1.
+5. **Revisit ADR 0002** (dev-as-deployment) when its trigger conditions fire (second machine, second operator, stable/dev split, atomic rollback, second deployment surface).
+6. **`docs/features.md`** still uses pre-charter vocab ("specialist" = "Unit"). Worth a terminology pass when convenient; not blocking.
+7. **AGENTS.md** does not exist in this repo yet. Optional per cluster convention; not blocking.
 
 ## Pointers
 
-- Charter original (with stale refs): `~/prj/prtr-config/intraface-charter.md`
-- Plan: `~/prj/prtr-config/docs/intraface-restructure-plan.md`
-- Old working dir (untouched): `~/prj/subagent-summarize/`
+- Charter (canonical): `docs/charter.md` in this repo
+- Old working dir (cold archive, read-only): `~/prj/archive/subagent-summarize/`
+- Old remote (cold backup): `rtr/subagent-summarize` on Forgejo
 - Oversight agent's terminal: `/home/prtr/.cursor/projects/home-prtr-prj-prtr-config/terminals/`
-- Live GLM service: PID 634777 on `127.0.0.1:7712` (do not disturb — 95% VRAM)
+- Live GLM service: PID 634777 on `127.0.0.1:7712` (do not disturb — ~95% VRAM)
