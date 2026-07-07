@@ -1,0 +1,52 @@
+# engines.toml — pinned source-of-truth for engines the Executor depends on.
+#
+# This file is the Intraface repo's authority on "what engines, at what
+# commits, for what role." The engine *binaries* are NOT in this repo — they
+# live in the standalone engine checkouts at ~/prj/{llama,ik_llama}.cpp/ and
+# are built from source there. This manifest records which commits are
+# known-good so a future agent can reproduce or verify.
+#
+# To re-pin after an upstream pull:
+#   cd ~/prj/<engine> && git rev-parse HEAD
+#   paste the full hash below
+#   update `pin_date`
+
+# ----- Substrate for the Core (resident model: GLM-4.7-Flash) -----
+
+[engines.ik_llama_cpp]
+role              = "core"                                            # serves the Core
+upstream          = "https://github.com/ikawrakow/ik_llama.cpp.git"
+mirror            = "ssh://git@git.ism.la:6666/rtr/ik_llama.cpp.git"
+checkout_path     = "/home/prtr/prj/ik_llama.cpp"
+pinned_commit     = "86d8e9a13c4d6e6fead9c9489ade4b0d283afc53"        # main, 2026-07-06
+pin_date          = "2026-07-06"
+binary            = "llama-server"
+binary_relpath    = "build/bin/llama-server"
+purpose           = "Serves the Core model (GLM-4.7-Flash) over HTTP on 127.0.0.1:7712."
+build_notes       = "CUDA build. Run `llama-bench` after rebuild to confirm."
+
+# ----- Substrate for Units (spawned per-call: extract, future units) -----
+
+[engines.llama_cpp]
+role              = "unit"                                            # serves Units
+upstream          = "https://github.com/ggml-org/llama.cpp.git"
+mirror            = "ssh://git@git.ism.la:6666/rtr/llama.cpp.git"
+checkout_path     = "/home/prtr/prj/llama.cpp"
+pinned_commit     = "a2d90e887ac0f79accaa095f30a71a907f7f3536"        # main, 2026-07-06
+pin_date          = "2026-07-06"
+binary            = "llama-cli"
+binary_relpath    = "build/bin/llama-cli"
+purpose           = "Per-call SLM inference for Units (extract, future). Spawned via argv-array, never sh -c."
+build_notes       = "CPU-only is sufficient for Units — see `extract.ts` CUDA_VISIBLE_DEVICES=\"\" discipline."
+
+# ----- Known defects at pinned commits (do not re-litigate without re-testing) -----
+
+[defects]
+# `-j` / `--json-schema` throws on sampler init at llama.cpp 9861.
+# Reproduced 2026-07-06. `--grammar-file *.gbnf` is the runtime constraint
+# mechanism until upstream fixes it.
+[defects.json_schema]
+engine            = "llama_cpp"
+last_verified     = "2026-07-06"
+symptom           = "Failed to initialize samplers: std::exception"
+workaround        = "Use --grammar-file with a hand-maintained .gbnf (see units/extract/grammar.gbnf)"

@@ -1,0 +1,16 @@
+# grammar.gbnf — enforces schema v2 (text + quote per item).
+# Hand-maintained until llama.cpp's -j/--json-schema sampler-init bug is
+# fixed upstream (confirmed broken 2026-07-06, mainline 9861/c8ae9a750).
+# Must be kept in sync with schema.ts's MODEL_OUTPUT_SCHEMA by hand — that
+# manual sync is the one piece of debt this fallback introduces.
+#
+# Differs from the old summary.gbnf (ported as an interim artifact
+# elsewhere): each array holds {text, quote} objects, not bare strings.
+# Bare strings carry no provenance and fail charter Test 2.
+
+root ::= "{" ws "\"summary\"" ws ":" ws string "," ws "\"key_points\"" ws ":" ws item-array "," ws "\"decisions\"" ws ":" ws item-array "," ws "\"action_items\"" ws ":" ws item-array "," ws "\"open_questions\"" ws ":" ws item-array ws "}" ws
+
+item-array ::= "[" ws (item ("," ws item)*)? "]" ws
+item       ::= "{" ws "\"text\"" ws ":" ws string "," ws "\"quote\"" ws ":" ws string ws "}" ws
+string     ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}))* "\"" ws
+ws         ::= | " " | "\n" [ \t]{0,20}
