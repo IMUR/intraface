@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.venv/
 
 # Model files — defensive. Models live in ~/.intraface/models/, never in-repo.
 *.gguf
@@ -12,5 +13,18 @@ dist/
 # Logs
 *.log
 
+# Generated evaluation artifacts
+experiments/**/output/
+
 # Runtime state — lives in ~/.intraface/state/, never here
 state/
+
+# Secrets — never commit
+.infisical.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.archive/
+vendor/

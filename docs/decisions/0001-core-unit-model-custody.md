@@ -45,8 +45,9 @@ Each Unit model lives in its own subdirectory under `unit/`, named
 `<family>-<size>-<variant>/`.
 
 The `core/` directory starts **empty**, with a README stating that GLM
-migration is pending (see `docs/glm-migration.md`) and naming the current
-location. This is a documented plan, not a silent placeholder.
+migration is pending (completed record now at
+`.archive/glm-migration.md`) and naming the current location. This is a
+documented plan, not a silent placeholder.
 
 The charter's claim that "Core — the single resident model" remains
 unchanged: "single resident" means one in memory at a time, not one in
@@ -81,7 +82,18 @@ existence.
 ## References
 
 - `docs/charter.md` — Core/Unit taxonomy, "single resident model" definition.
-- `docs/glm-migration.md` — implications of moving GLM into `core/`
+- `.archive/glm-migration.md` — completed record of moving GLM into `core/`
   custody.
 - `engines.toml` — pins engine commits and mirrors the core/unit
   distinction at the engine layer.
+
+## Outcome (verified 2026-07-15)
+
+The layout is active:
+
+- GLM-4.7-Flash, stock Qwen3.6 Q8_0, and two uncensored Qwen3.6
+  quantizations live under `~/.intraface/models/core/`.
+- Qwen3.6 Uncensored Aggressive Q6_K_P is currently resident.
+- LFM2.5-1.2B-Instruct remains under `models/unit/`.
+- Fun-Audio-Chat model files remain as rejected-candidate evidence; ADR
+  0006 rejects it as a Core candidate without deleting the assets.

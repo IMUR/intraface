@@ -1,7 +1,7 @@
 # 0002. Dev tree is the runtime target (collapsed deployment)
 
 Date: 2026-07-07
-Status: accepted
+Status: superseded by [0007]
 
 ## Context
 
