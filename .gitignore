@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 .venv/
+__pycache__/
 
 # Model files — defensive. Models live in ~/.intraface/models/, never in-repo.
 *.gguf

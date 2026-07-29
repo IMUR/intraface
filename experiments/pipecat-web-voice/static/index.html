@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intraface Voice</title>
+    <style>
+        :root {
+            --bg: #0f1115;
+            --panel: #1a1d24;
+            --border: #2a2e37;
+            --text: #e4e6eb;
+            --muted: #8b909a;
+            --user: #4a9eff;
+            --assistant: #b388ff;
+            --ok: #4caf50;
+            --warn: #ff9800;
+            --err: #f44336;
+        }
+        * { box-sizing: border-box; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem 1rem;
+        }
+        h1 { font-weight: 500; margin: 0 0 0.5rem; font-size: 1.5rem; }
+        #controls {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-bottom: 1.5rem;
+            width: 100%;
+            max-width: 720px;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        #status-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--muted);
+            flex-shrink: 0;
+            transition: background 0.2s;
+        }
+        #status-dot.connecting { background: var(--warn); animation: pulse 1s infinite; }
+        #status-dot.connected { background: var(--ok); }
+        #status-dot.error { background: var(--err); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        #status-text { flex: 1; font-size: 0.9rem; color: var(--muted); }
+        button {
+            background: var(--user);
+            color: white;
+            border: none;
+            padding: 0.6rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        button:hover:not(:disabled) { opacity: 0.9; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.connected { background: var(--err); }
+        #transcript {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 100%;
+            max-width: 720px;
+            flex: 1;
+            min-height: 400px;
+            max-height: 60vh;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+        }
+        .turn { display: flex; flex-direction: column; gap: 0.2rem; }
+        .turn-role {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            padding-left: 0.5rem;
+        }
+        .turn-role.user { color: var(--user); }
+        .turn-role.assistant { color: var(--assistant); }
+        .turn-text {
+            padding: 0.6rem 0.8rem;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            line-height: 1.4;
+        }
+        .turn-text.user { background: rgba(74, 158, 255, 0.1); border-left: 2px solid var(--user); }
+        .turn-text.assistant { background: rgba(179, 136, 255, 0.1); border-left: 2px solid var(--assistant); }
+        .empty-hint { color: var(--muted); text-align: center; padding: 2rem; font-style: italic; }
+        audio { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Intraface Voice</h1>
+
+    <div id="controls">
+        <div id="status-dot"></div>
+        <div id="status-text">Disconnected</div>
+        <button id="connect-btn">Connect</button>
+    </div>
+
+    <div id="transcript">
+        <div class="empty-hint">Press Connect and start speaking. Transcript will appear here.</div>
+    </div>
+
+    <audio id="audio-el" autoplay></audio>
+
+    <script>
+        const statusDot = document.getElementById("status-dot");
+        const statusText = document.getElementById("status-text");
+        const connectBtn = document.getElementById("connect-btn");
+        const transcriptEl = document.getElementById("transcript");
+        const audioEl = document.getElementById("audio-el");
+
+        let peerConnection = null;
+        let isConnected = false;
+
+        function setStatus(state, text) {
+            statusDot.className = state;
+            statusText.textContent = text;
+        }
+
+        function addTurn(role, text) {
+            const empty = transcriptEl.querySelector(".empty-hint");
+            if (empty) empty.remove();
+            const turn = document.createElement("div");
+            turn.className = "turn";
+            const roleEl = document.createElement("div");
+            roleEl.className = `turn-role ${role}`;
+            roleEl.textContent = role;
+            const textEl = document.createElement("div");
+            textEl.className = `turn-text ${role}`;
+            textEl.textContent = text;
+            turn.appendChild(roleEl);
+            turn.appendChild(textEl);
+            transcriptEl.appendChild(turn);
+            transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        }
+
+        function sendIceCandidate(pc, candidate) {
+            return fetch("/api/offer", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    pc_id: pc.pc_id,
+                    candidates: [{
+                        candidate: candidate.candidate,
+                        sdp_mid: candidate.sdpMid,
+                        sdp_mline_index: candidate.sdpMLineIndex
+                    }]
+                })
+            });
+        }
+
+        async function createPeerConnection(audioTrack) {
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+            });
+            pc.pendingIceCandidates = [];
+            pc.canSendIceCandidates = false;
+
+            pc.ontrack = (e) => { audioEl.srcObject = e.streams[0]; };
+            pc.oniceconnectionstatechange = () => console.log("ice:", pc.iceConnectionState);
+            pc.onconnectionstatechange = () => {
+                console.log("conn:", pc.connectionState);
+                if (pc.connectionState === "connected") {
+                    setStatus("connected", "Connected");
+                    connectBtn.textContent = "Disconnect";
+                    connectBtn.classList.add("connected");
+                    connectBtn.disabled = false;
+                    isConnected = true;
+                } else if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
+                    onDisconnected();
+                }
+            };
+            pc.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    if (pc.canSendIceCandidates && pc.pc_id) {
+                        await sendIceCandidate(pc, event.candidate);
+                    } else {
+                        pc.pendingIceCandidates.push(event.candidate);
+                    }
+                }
+            };
+
+            // Client creates the data channel — pipecat's SmallWebRTCTransport
+            // listens for it via @pc.on("datachannel") on the server side.
+            // Without this, the server times out after 10s waiting for a
+            // channel that never arrives, and transcript messages are dropped.
+            const dc = pc.createDataChannel("pipecat");
+            dc.onmessage = (msg) => {
+                try {
+                    const payload = JSON.parse(msg.data);
+                    if (payload.role && payload.text) {
+                        addTurn(payload.role, payload.text);
+                    }
+                } catch (e) {
+                    console.warn("bad app message:", msg.data, e);
+                }
+            };
+
+            // SmallWebRTCTransport expects two transceivers (audio + video),
+            // even when video is unused. Audio track is the real mic.
+            pc.addTransceiver(audioTrack, { direction: "sendrecv" });
+            pc.addTransceiver("video", { direction: "sendrecv" });
+
+            await pc.setLocalDescription(await pc.createOffer());
+            const response = await fetch("/api/offer", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type
+                })
+            });
+            if (!response.ok) throw new Error(`offer failed: ${response.status}`);
+            const answer = await response.json();
+            pc.pc_id = answer.pc_id;
+            await pc.setRemoteDescription(answer);
+
+            pc.canSendIceCandidates = true;
+            for (const c of pc.pendingIceCandidates) await sendIceCandidate(pc, c);
+            pc.pendingIceCandidates = [];
+
+            return pc;
+        }
+
+        async function connect() {
+            connectBtn.disabled = true;
+            setStatus("connecting", "Requesting microphone...");
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                setStatus("connecting", "Connecting...");
+                peerConnection = await createPeerConnection(stream.getAudioTracks()[0]);
+            } catch (err) {
+                console.error(err);
+                setStatus("error", `Error: ${err.message}`);
+                connectBtn.disabled = false;
+            }
+        }
+
+        function onDisconnected() {
+            setStatus("", "Disconnected");
+            connectBtn.textContent = "Connect";
+            connectBtn.classList.remove("connected");
+            connectBtn.disabled = false;
+            isConnected = false;
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+        }
+
+        function disconnect() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            onDisconnected();
+        }
+
+        connectBtn.addEventListener("click", () => {
+            if (!isConnected) connect(); else disconnect();
+        });
+    </script>
+</body>
+</html>
