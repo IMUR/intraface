@@ -116,6 +116,16 @@ Status: **planned** (not started)
 - [x] **Verified working live** — user tested vox.rtr.dev end-to-end at 13:24.
       Bot log shows full LLM+TTS round trip ("Vox here, ready to help."),
       clean pipeline teardown. React UI is the live page.
+- [x] `frontend/design/vox.dc.html` transposed into the production React UI
+      (2026-07-29): phase-aware orb, waveform, transcript, expandable tool
+      calls, display modes, silent/spoken text replies, metrics, mute, and
+      explicit terminal states.
+- [x] Prototype simulation controls removed; all visible states now derive
+      from the real Pipecat transport and RTVI event stream.
+- [x] Production build passed (`tsc -b && vite build`) and was exercised at
+      `vox.rtr.dev`: idle render, settings, WebRTC connect through `bot-ready`
+      to `LISTENING`, and explicit session end all verified in-browser.
+- [x] Legacy vanilla fallback remains available at `/vanilla/`.
 
 ### RTVI handoff was wrong about the prerequisite
 

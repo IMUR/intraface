@@ -64,7 +64,7 @@ e.g. a subtle "hearing you" pulse on VAD vs. a committed "turn" state.
 | User turns | Final transcription per turn. Partial hypotheses exist in the protocol; our STT is batch, so partials arrive late/not at all today ⟳ streaming STT is a backend follow-up |
 | Assistant turns | Streaming token-by-token (`bot-llm-text`) AND sentence-aggregated |
 | **Spoken vs. unspoken text** | Every assistant chunk carries `spoken` / `unspoken` portions — enables **karaoke mode**: words highlight as the bot actually says them. Also captions mode (sentence-at-a-time) and instant mode. This is voice-native; a chat UI doesn't have it |
-| **Function/tool calls** | The bot has live cluster tools (node health, logs, ports, file reads, web search planned). Calls appear in the timeline with name, status (started/in-progress/completed), arguments, result — collapsible renderers exist; custom renderers per tool are supported |
+| **Function/tool calls** | The bot has live cluster tools (node health, logs, ports), file reads, and web search. Calls appear in the timeline with name, status (started/in-progress/completed), arguments, result — collapsible renderers exist; custom renderers per tool are supported |
 | System/injected messages | Arbitrary messages can be injected client-side into the timeline |
 | Timestamps | Per message/part |
 

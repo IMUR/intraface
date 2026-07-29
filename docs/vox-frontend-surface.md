@@ -72,9 +72,12 @@ Trickle ICE. Request:
 ```
 Response: `{"status": "success"}`
 
-### `GET /` and `GET /static/*`
+### Frontend routes
 
-Serves the frontend. No other routes exist.
+- `GET /` serves the built React client.
+- `GET /assets/*` serves its hashed Vite assets.
+- `GET /vanilla/*` serves the legacy fallback client.
+- `GET /static/*` remains mounted for backward compatibility.
 
 ---
 
@@ -243,7 +246,8 @@ A redesign that wants any of these must coordinate with the `bot.py` /
 - Works today: modern Chrome, Firefox, Safari on the tailnet.
 - Required APIs: `RTCPeerConnection`, `getUserMedia`, `createDataChannel`
   — universal, but mobile Safari has quirks.
-- Mobile layout: current page is responsive but not one-handed-optimized.
+- Mobile layout: the production React page has a compact responsive toolbar,
+  transcript, and wrapping composer; one-handed use still needs device testing.
 
 ---
 
