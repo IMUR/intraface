@@ -4,6 +4,63 @@
 **For:** Engineer picking up agent capability work on the vox voice bot
 **Scope:** Giving the voice bot tools, identity, and self-awareness beyond pure conversation
 
+**Your companion file:** `docs/voice-chat-evaluation.md`. That's the only
+other file you should need. Its **"Reference: shared context"** section has
+the current `bot.py` shape (pipeline order, system prompt, env vars),
+`server.py` shape, `static/index.html` shape, full cluster topology (nodes,
+SSH aliases, port blocks), SSH execution discipline, the JSON schema defect
+details, ADRs in force, and where every file lives. Read its Reference
+section before starting.
+
+If something you need isn't in either this handoff or the evaluation doc's
+Reference section, surface it as a gap before guessing.
+
+---
+
+## Addendum 2026-07-29 (post-implementation) — read this first
+
+The original scope below (v1: read-only cluster ops) has been **implemented
+and verified live**. Files now in place:
+
+- `experiments/pipecat-web-voice/AGENTS.md` — vox identity, full target state
+- `experiments/pipecat-web-voice/tools.py` — `_ssh()` helper + four read-only
+  tools (`check_node`, `list_services`, `get_log_tail`, `get_port_state`)
+- `experiments/pipecat-web-voice/bot.py` — tools registered via
+  `LLMContext(tools=[...])`, filler narration hook wired,
+  `max_completion_tokens` raised from 120 to 300 for tool-using turns
+- `experiments/pipecat-web-voice/tests/test_tools.py` — live-cluster tests
+  (passes 100% as of 2026-07-29)
+
+End-to-end verification: live llama-server correctly selects tools for
+voice-shaped queries ("is drtr up?" → `check_node`, "what's listening on
+prtr?" → `get_port_state`, etc.) and declines to call tools for non-cluster
+questions. See test logs in commit history.
+
+**The expanded scope beyond v1** (Layer 2 filesystem, Layer 3 web search,
+Layer 4 Pi delegation, Layer 5 modes) is designed but **not yet
+implemented**. See `experiments/pipecat-web-voice/AGENTS.md` for the design
+and intended sequencing. Layer 1 is the proving ground — do not start
+Layer 2+ until Layer 1 is stable and patterns recur.
+
+### Corrections to the original handoff (below)
+
+The original Patterns 1 and 2 in the next section reference APIs that do
+**not** exist in pipecat 1.6.0:
+
+- `from pipecat.services.llm_service import FunctionCallParams` — wrong path.
+  Real path: `from pipecat.services.llm_service import FunctionCallParams`
+  (the symbol exists, the import path in the original Pattern 1 source
+  snippet was correct, but Pattern 2's `from pipecat.services.llm_service
+  import FunctionSchema` is **wrong** — that class is not there).
+- `register_function` does not exist in pipecat 1.6.0. Tool handlers are
+  registered automatically when the function is passed to `LLMContext(tools=...)`.
+- The schema-defect section below is **resolved** as of 2026-07-29. See
+  `engines.toml [defects.ik_llama_json_schema]` for verification details.
+
+The corrected, verified patterns are in the next section, marked **(verified
+2026-07-29)**. The original (incorrect) text is retained below them for
+provenance.
+
 ---
 
 ## Current state — what's deployed
@@ -45,30 +102,42 @@ The bot runs on prtr as user `prtr`. SSH aliases to other cluster nodes (`drtr`,
 
 ## Pipecat function calling — verified working
 
-Pipecat's `OpenAILLMService` natively supports OpenAI-format function calling. The llama-server backend also supports it (with the caveat below). Two registration patterns per [pipecat docs](https://docs.pipecat.ai/pipecat/learn/function-calling):
+Pipecat's `OpenAILLMService` natively supports OpenAI-format function calling. The llama-server backend also supports it (with the caveat below).
 
-### Pattern 1 — Direct function (recommended for v1)
+### Patterns that actually work in pipecat 1.6.0 (verified 2026-07-29)
+
+There is one canonical path: pass async functions (or `FunctionSchema`
+objects) directly to `LLMContext(tools=[...])`. The function's first
+parameter must be named `params` and typed as `FunctionCallParams`;
+pipecat's `DirectFunctionWrapper` reads the rest of the signature and the
+docstring to auto-derive the JSON Schema sent to the model. Handlers are
+registered automatically — there is no `register_function` call in 1.6.0.
+
+**Direct function (recommended — what `tools.py` uses):**
 
 ```python
 from pipecat.services.llm_service import FunctionCallParams
 
-async def check_node(params: FunctionCallParams, node: str):
+async def check_node(params: FunctionCallParams, node: str) -> None:
     """Check if a cluster node is reachable and report basic status.
     Args:
         node: Cluster node name (prtr, drtr, crtr, or trtr)
     """
-    result = await _ssh(node, "uptime; systemctl is-active cockpit 2>/dev/null")
-    await params.result_callback({"status": result})
+    result = await _ssh(node, "uptime; ...")
+    await params.result_callback({"node": node, "reachable": True, ...})
 
-context = LLMContext(tools=[check_node])
+# bot.py:
+context = LLMContext(tools=[check_node, list_services, ...])
 ```
 
-Pipecat auto-derives the JSON Schema from the type annotations + docstring. No manual schema work needed.
+The docstring's `Args:` block is what populates the per-parameter
+description in the derived schema. Type annotations become the JSON Schema
+type. Enums are not supported via this path — for those use `FunctionSchema`.
 
-### Pattern 2 — FunctionSchema (use only if you need enums or strict constraints)
+**Explicit FunctionSchema (when you need enums or strict constraints):**
 
 ```python
-from pipecat.services.llm_service import FunctionSchema
+from pipecat.adapters.schemas.function_schema import FunctionSchema
 
 check_node_schema = FunctionSchema(
     name="check_node",
@@ -81,20 +150,35 @@ check_node_schema = FunctionSchema(
         }
     },
     required=["node"],
-    handler=check_node_handler,
+    handler=check_node_handler,  # async (params, node) -> None
 )
+# Then: LLMContext(tools=[check_node_schema])
 ```
 
-### Voice-specific hooks
+Note the import path: `pipecat.adapters.schemas.function_schema`, **not**
+`pipecat.services.llm_service`. The latter was a fabrication in the
+original handoff (see addendum at top).
 
-Pipecat emits events for function call lifecycle. Hook these to keep the user informed during tool execution:
+`FunctionSchema.to_default_dict()` emits exactly `{type, properties,
+required}` — no `additionalProperties: true`. Verified by direct
+inspection in `tools.py`'s tests. This means the historical llama-server
+schema defect (below) cannot be triggered via the standard path, even on
+an unfixed server.
+
+### Voice-specific hooks (verified)
+
+Pipecat emits events for function call lifecycle. Hook these to keep the
+user informed during tool execution. The `bot.py` implementation uses
+exactly this shape:
 
 ```python
 @llm.event_handler("on_function_calls_started")
 async def on_function_calls_started(service, function_calls):
-    # Push filler speech so the user isn't in silence during the SSH call
+    # Push filler speech so the user isn't in silence during the SSH call.
+    # Specific beats generic — see bot.py's _tool_filler() helper which
+    # derives "checking drtr" from check_node(node="drtr").
     from pipecat.frames.frames import TTSSpeakFrame
-    await tts.queue_frame(TTSSpeakFrame("Let me check that.""))
+    await tts.queue_frame(TTSSpeakFrame("Let me check that."))
 
 @llm.event_handler("on_function_calls_cancelled")
 async def on_function_calls_cancelled(service, function_calls):
@@ -103,45 +187,103 @@ async def on_function_calls_cancelled(service, function_calls):
         logger.info(f"Function call cancelled: {item.function_name}")
 ```
 
-For long-running tools that should survive interruption: `OpenAILLMService(..., enable_async_tool_cancellation=True)` + `@tool_options(cancel_on_interruption=False)` on the function.
+For long-running tools that should survive interruption, the 1.6.0
+mechanism is the `@tool_options(cancel_on_interruption=False)` decorator
+on the function itself (not an `OpenAILLMService` init kwarg as the
+original handoff claimed).
+
+### Original patterns (retained for provenance — DO NOT USE)
+
+The two patterns below appeared in the original handoff. They reference
+APIs that don't exist in pipecat 1.6.0 and are kept here only so future
+readers can see what was wrong. Use the verified patterns above.
+
+<details>
+<summary>Original Pattern 1 (fabricated — does not work)</summary>
+
+```python
+# BROKEN: `register_function` does not exist in pipecat 1.6.0.
+# BROKEN: `LLMContext(tools=[check_node])` shape is correct, but the
+#         surrounding Pattern 1 implied a separate registration step.
+from pipecat.services.llm_service import FunctionCallParams  # this import is OK
+
+async def check_node(params: FunctionCallParams, node: str):
+    result = await _ssh(node, "uptime; systemctl is-active cockpit 2>/dev/null")
+    await params.result_callback({"status": result})
+
+context = LLMContext(tools=[check_node])  # this line is correct
+```
+
+</details>
+
+<details>
+<summary>Original Pattern 2 (fabricated import — does not work)</summary>
+
+```python
+# BROKEN: FunctionSchema is not in pipecat.services.llm_service.
+# BROKEN: real path is pipecat.adapters.schemas.function_schema.
+from pipecat.services.llm_service import FunctionSchema  # WRONG
+
+check_node_schema = FunctionSchema(
+    name="check_node",
+    description="Check if a cluster node is reachable",
+    properties={"node": {"type": "string", "enum": [...], "description": "..."}},
+    required=["node"],
+    handler=check_node_handler,
+)
+```
+
+</details>
 
 ---
 
 ## Critical llama-server constraint — function calling has a known defect
 
-**The resident llama-server (`ik_llama.cpp` pinned commit `86d8e9a1`, 2026-07-06) has a known JSON Schema parsing bug.** When the OpenAI SDK sends a tool definition that includes a schema value of `true` (allowed in JSON Schema 2020-12, means "accept any value"), ik_llama.cpp rejects it with:
+> **STATUS (2026-07-29): RESOLVED.** Verified live — see `engines.toml
+> [defects.ik_llama_json_schema]` for verification details. The section
+> below is retained for provenance; do not act on it without re-verifying
+> the defect is back.
 
-```
-Error: 500: {"code":500,"message":"Unable to generate parser for this template. Automatic parser generation failed: JSON schema conversion failed:\nUnrecognized schema: true","type":"server_error"}
-```
-
-This is documented in `engines.toml [defects.json_schema]` and reproducible from Pi.
+**The resident llama-server has a JSON Schema parsing bug** that affects tool registration. Full background (symptom, root cause, fix status, engines.toml reference) is in the evaluation doc's Reference section under "llama-server JSON schema defect."
 
 **Impact on agent capability work:** Some tool schemas generated by pipecat or by the OpenAI SDK may include `true` values (especially `additionalProperties: true` on object types). If you see this 500 error when registering tools, it's this defect, not your schema.
 
-**Status as of 2026-07-29:** A one-line fix exists upstream (add boolean handling to `common/json-schema-to-grammar.cpp` before the existing `{}` case). The user is handling that fix in a separate workstream. Until it lands, you may need to write schemas by hand (avoiding `true`/`false` literal values) rather than relying on pipecat's auto-derivation.
+**Status as of 2026-07-29:** A one-line fix exists upstream. The user is handling that fix in a separate workstream (Pi's terminal on prtr has the latest state). Until it lands, you may need to write schemas by hand with `FunctionSchema` (avoiding `true`/`false` literal values) rather than relying on pipecat's auto-derivation from direct functions.
 
-**Verification step before building tools:** Test a single tool registration against the live llama-server. If it returns 500, the schema-derivation path is blocked until the upstream fix lands.
+**Verification step before building tools:** Test a single tool registration against the live llama-server (`http://127.0.0.1:7712/v1`). If it returns 500, the schema-derivation path is blocked until the upstream fix lands — stop and surface this rather than working around it silently.
+
+> **Update 2026-07-29:** The verification step above was performed and passed.
+> All three probe schemas (with `additionalProperties: true`, minimal,
+> typed-enum) returned HTTP 200, and a full tool-call roundtrip succeeded.
+> The defect is empirically gone against the pinned commit. Mechanism
+> unclear — see engines.toml.
 
 ---
 
 ## SSH execution path
 
-The bot runs on prtr as user `prtr`. The cluster SSH config (`~/.ssh/config`) provides passwordless aliases:
+The bot runs on prtr as user `prtr`. The cluster SSH config provides
+passwordless aliases (table in evaluation doc's Reference section). For tool
+execution, `tools.py:_ssh()` uses
+`asyncio.create_subprocess_exec("ssh", node, command)` where `command` is a
+single shell string sent to the remote login shell.
 
-| Alias | Resolves to | User |
-|---|---|---|
-| `c` / `crtr` | `100.64.0.4` / `192.168.254.11` | `crtr` |
-| `p` / `prtr` | `100.64.0.2` / `192.168.254.22` | `prtr` |
-| `d` / `drtr` | `100.64.0.3` / `192.168.254.33` | `drtr` |
-| `t` / `trtr` | `100.64.0.1` / `192.168.254.107` | `trtr` |
+**Why shell string, not argv array:** several tools need shell features
+(pipes for `systemctl | grep`, command substitution for `$(...)`). These
+don't survive `shlex.split` followed by exec. Safety rests on the command
+being constructed from fixed shapes inside `tools.py` — the model only
+supplies arguments that go through `shlex.quote()` or strict regex
+validation before reaching the SSH boundary. No caller interpolates raw
+user/LLM strings without quoting. **Never `shell=True`** (different
+process, more dangerous, and unnecessary here — the remote login shell
+handles the command string).
 
-For tool execution, use `asyncio.create_subprocess_exec("ssh", "<alias>", "<command>")` — never `shell=True`, never `sh -c`. The cluster's `ControlMaster auto` SSH config (per `rtr-profile.md:211`) multiplexes connections so repeated SSH calls are fast (~10ms after first connection).
-
-**Cluster SSH discipline** (from `rtr-profile.md:283-294`):
-- Bash is the default login shell on Linux nodes. `ssh <node> '<cmd>'` works directly.
-- Don't use `zsh -l -c` for non-interactive ops — unreliable pattern, unnecessary on Linux nodes.
-- `ControlMaster` sockets can stale after node reboot. If SSH fails with "Connection closed", run `ssh -O exit <node>` then retry.
+**Cluster SSH discipline** (full version in evaluation doc's Reference
+section under "SSH execution discipline"). Key points:
+- Bash is the default login shell on Linux nodes — bare `ssh <node> '<cmd>'` works
+- Don't use `zsh -l -c` for non-interactive ops
+- `ControlMaster` sockets can stale after node reboot — `ssh -O exit <node>` then retry
+- trtr is macOS and may sleep — tools targeting trtr should use 3-5s timeout and return "unreachable" rather than raise
 
 ---
 
@@ -151,7 +293,7 @@ Author at `experiments/pipecat-web-voice/AGENTS.md`. Should cover:
 
 1. **What vox is** — voice interface to the rtr cluster, browser-accessible at vox.rtr.dev, talks through WebRTC, uses the resident Qwen3.6 Core
 2. **What vox is not** — not Pi, not a coding agent, not a substitute for shell access, not a general-purpose chatbot
-3. **What vox knows** — cluster topology (load from `rtr-profile.md` facts: 4 nodes, port blocks, services, model identities)
+3. **What vox knows** — cluster topology (4 nodes, port blocks, services, model identities — all in the evaluation doc's Reference section)
 4. **What vox can do** — answer questions about cluster state via the registered tools
 5. **What vox should refuse** — mutation, destructive commands, actions outside its tool set, pretending to have capabilities it doesn't
 6. **Voice constraints** — short sentences, plain spoken language, narrate during tool calls, summarize tool results in one sentence (don't read raw output)
@@ -203,20 +345,23 @@ Don't need to touch: `server.py`, `static/index.html`, anything in `docs/decisio
 
 ---
 
-## What to read first (in order)
+## What to read first
 
-1. `experiments/pipecat-web-voice/bot.py` — current pipeline structure
-2. `experiments/pipecat-web-voice/README.md` — deployment context
-3. `rtr-profile.md` lines 12-18 (nodes) and 80-148 (port blocks) — what the tools will inspect
-4. `engines.toml [defects.json_schema]` — the schema parsing bug to watch for
-5. `docs/charter.md` — conceptual model (not directly applicable but informs identity choices)
-6. [Pipecat function calling docs](https://docs.pipecat.ai/pipecat/learn/function-calling) — canonical API reference
+1. **Evaluation doc's Reference section** — for the current bot.py shape, cluster topology, SSH discipline, schema defect, file locations, ADRs in force. This is your primary source of facts.
+2. **This handoff's "Confirmed scope" section above** — for what was decided (identity source, tool whitelist).
+3. **`experiments/pipecat-web-voice/bot.py`** — read directly when you're ready to modify it. The Reference section summarizes its shape; the actual file is the truth.
+4. [Pipecat function calling docs](https://docs.pipecat.ai/pipecat/learn/function-calling) — canonical API reference for `FunctionCallParams`, `FunctionSchema`, `register_function`.
+
+Optionally, if you want deeper context (not required to start):
+- `docs/charter.md` — conceptual model; informs identity choices but not directly applicable
+- `docs/decisions/0001-core-unit-model-custody.md` and `0007-explicit-per-node-runtime-deployment.md` — architectural constraints already summarized in Reference
+- `~/.pi/agent/AGENTS.md` — Pi's identity, for pattern reference only (do not copy)
 
 ---
 
 ## Open questions for the user before starting
 
-1. **What cluster services should the bot know about by name?** rtr-profile.md lists many; some are inactive. The bot's mental model should match what's actually deployed.
+1. **What cluster services should the bot know about by name?** The evaluation doc's Reference section lists the voice-relevant live ports (7878, 7712, 7733, 7744, 5511, 443) but the broader cluster has more services, some inactive. The bot's mental model should match what's actually deployed — ask the user to enumerate beyond what's in the Reference section if needed.
 
 2. **Should the bot know about the charter / five tests?** Probably not directly — too abstract for voice — but it should know it's part of a system with disciplines, not just a chatbot.
 

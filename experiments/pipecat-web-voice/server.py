@@ -1,12 +1,13 @@
 """FastAPI signaling server for the Intraface voice bot.
 
 Exposes:
-    POST /api/offer   WebRTC SDP exchange (SmallWebRTCRequestHandler)
-    PATCH /api/offer  trickle ICE candidate relay
-    GET  /            static/index.html (the WebRTC client + transcript UI)
-    GET  /static/*    assets
+    POST /api/offer    WebRTC SDP exchange (SmallWebRTCRequestHandler)
+    PATCH /api/offer   trickle ICE candidate relay
+    GET  /             React client (frontend/dist/) — primary UI
+    GET  /vanilla      vanilla JS client — fallback if React handshake fails
+    GET  /assets/*     React build assets (hashed)
+    GET  /vanilla/*    vanilla client assets
 """
-
 import argparse
 import sys
 from contextlib import asynccontextmanager
@@ -28,12 +29,44 @@ from bot import run_bot
 
 load_dotenv(override=True)
 
-STATIC_DIR = Path(__file__).parent / "static"
+# Static layout. The React build (frontend/dist/) is the live page; the
+# vanilla client (frontend/vanilla/) is kept as a fallback at /vanilla in
+# case the React client's RTVI handshake ever regresses. Both resolve via
+# path relative to this file so the bot can run from its checkout without
+# a build step or env config.
+_HERE = Path(__file__).parent
+REACT_DIST_DIR = _HERE.parent.parent / "frontend" / "dist"
+VANILLA_DIR = _HERE.parent.parent / "frontend" / "vanilla"
+
+# Legacy static dir retained for backward compatibility — the prior page
+# (static/index.html) and any other assets. Harmless to keep mounted.
+STATIC_DIR = _HERE / "static"
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 small_webrtc_handler = SmallWebRTCRequestHandler()
+
+# React build assets. Mounted at /assets/ (the path the built index.html
+# references via <script src="/assets/...">). html=False so directory
+# listings don't get served at /assets/.
+if REACT_DIST_DIR.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=REACT_DIST_DIR / "assets", html=False),
+        name="react-assets",
+    )
+
+# Vanilla fallback assets mounted at /vanilla/. The vanilla index.html
+# references styles.css relatively, so this preserves its expected paths.
+if VANILLA_DIR.is_dir():
+    app.mount(
+        "/vanilla",
+        StaticFiles(directory=VANILLA_DIR, html=True),
+        name="vanilla",
+    )
+
+# Legacy /static/* mount — preserved for any old caller. Today this serves
+# the original static/index.html page (now superseded by the React app at /).
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.post("/api/offer")
@@ -54,8 +87,9 @@ async def ice_candidate(request: SmallWebRTCPatchRequest):
 
 
 @app.get("/")
-async def serve_index():
-    return FileResponse(STATIC_DIR / "index.html")
+async def serve_react_index():
+    """Primary UI — the React build."""
+    return FileResponse(REACT_DIST_DIR / "index.html")
 
 
 @asynccontextmanager

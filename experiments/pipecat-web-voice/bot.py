@@ -18,6 +18,7 @@ without this flag, the Qwen3.6 Uncensored Aggressive resident emits only
 reasoning_content and stops before producing user-facing text).
 """
 
+import json
 import os
 
 from dotenv import load_dotenv
@@ -44,6 +45,15 @@ from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.workers.runner import WorkerRunner
 
+# Layer 1 + Layer 2 cluster tools (see AGENTS.md). Registered as direct
+# functions: pipecat's DirectFunctionWrapper auto-derives a clean
+# FunctionSchema from each callable's type annotations and docstring.
+# Verified 2026-07-29 the derived schema does not emit
+# `additionalProperties: true`, so it does not trip the historical
+# llama-server JSON-schema defect (now also resolved on the live server —
+# see engines.toml [defects.json_schema]).
+import tools as vox_tools
+
 load_dotenv(override=True)
 
 PARAKEET_URL = os.getenv("PARAKEET_URL", "http://100.64.0.3:7733/v1")
@@ -55,10 +65,54 @@ LLAMA_URL = os.getenv("LLAMA_URL", "http://127.0.0.1:7712/v1")
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "qwen3.6-uncensored-q6-k-p")
 
 SYSTEM_INSTRUCTION = (
-    "You are a conversational voice assistant. Your output is converted to "
-    "speech, so use plain spoken language with no Markdown, no lists, no "
-    "headings, and no citations. Keep responses short — typically one or two "
-    "sentences. Answer directly."
+    "You are vox, a voice interface to the rtr cluster. You are not a generic "
+    "chatbot — you have read-only tools that show you the live state of four "
+    "machines (prtr, drtr, crtr, trtr), let you read files under "
+    "~/prj/intraface/ on prtr, and let you search the web via the cluster's "
+    "SearXNG instance at sch.rtr.dev.\n"
+    "\n"
+    "You yourself run on prtr as a pipecat bot at port 7878. Your resident "
+    "model is Qwen3.6 (the Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive "
+    "Q6_K_P GGUF), served by llama-server on prtr:7712. Your speech path "
+    "is Parakeet STT on drtr:7733 and Chatterbox TTS on drtr:7744. You reach "
+    "the browser via crtr's Caddy at vox.rtr.dev.\n"
+    "\n"
+    "Your output is converted to speech, so use plain spoken language with no "
+    "Markdown, no lists, no headings, and no URLs. Keep responses short — "
+    "typically one sentence, at most two.\n"
+    "\n"
+    "TOOLS COME FIRST. Any question about cluster state — nodes, services, "
+    "ports, logs, listeners, uptime, what's running, what's up — must be "
+    "answered by calling a tool, not by recalling from memory. The same goes "
+    "for questions about files in the project: 'what's in bot.py', 'where is "
+    "X defined', 'find files matching Y' — call the filesystem tool. And "
+    "the same for anything outside what you could possibly know from "
+    "cluster state or local files — library versions, current docs, recent "
+    "papers, code patterns, package names — call web_search rather than "
+    "answering from your training data, which is stale. You do not have "
+    "memorized facts about the cluster, the codebase, or the wider world; "
+    "if a tool exists for the question, call it. The only questions you "
+    "answer without a tool are ones entirely outside these scopes (general "
+    "knowledge like capitals or arithmetic, who you are, what you can do).\n"
+    "\n"
+    "When you call a tool, you will hear yourself say a short filler first "
+    "('let me check drtr' or similar). After the result arrives, summarize it "
+    "in one sentence. Never read raw tool output aloud — translate the data "
+    "into a brief natural statement. For file reads, do not recite the file "
+    "contents; describe what the file is and, if asked, paraphrase the most "
+    "relevant part in one sentence. For web search, never read URLs aloud — "
+    "speak one sentence naming the strongest source and what it says, then "
+    "offer to elaborate if the user wants more. If a node is unreachable or "
+    "a path is outside your allowlist, say so plainly and stop; do not "
+    "speculate.\n"
+    "\n"
+    "You cannot change cluster state or write files. If asked to start, stop, "
+    "edit, write, or delete anything, say that you can't and that the user "
+    "should use Pi, SSH, or cockpit for that. Never pretend to have "
+    "capabilities you do not have.\n"
+    "\n"
+    "If you don't know something and have no tool that can find out, say so. "
+    "Do not invent facts."
 )
 
 DUMMY_API_KEY = "dummy"
@@ -109,6 +163,52 @@ class TranscriptForwarder(FrameProcessor):
         self._webrtc_connection.send_app_message({"role": role, "text": text})
 
 
+# Map tool names to short, specific spoken fillers. Returns a string the TTS
+# speaks immediately when the LLM starts a tool call, so the user isn't in
+# silence during the SSH round-trip. Specific beats generic.
+_TOOL_FILLERS = {
+    # Layer 1 — cluster ops
+    "check_node":     "checking {node}",
+    "list_services":  "listing services on {node}",
+    "get_log_tail":   "pulling the {service} log on {node}",
+    "get_port_state": "checking listeners on {node}",
+    # Layer 2 — filesystem (read-only). Path args go through a basename
+    # trim so the spoken filler stays short — "reading bot.py" not
+    # "reading /home/prtr/prj/intraface/experiments/.../bot.py".
+    "read_file":       "reading the file",
+    "list_directory":  "listing the directory",
+    "find_files":      "searching for files matching {pattern}",
+    "grep_files":      "searching file contents for {pattern}",
+    # Layer 3 — web search. Filler names the query so the user knows what's
+    # being looked up during the SearXNG round-trip (~100-500ms).
+    "web_search":      "searching the web for {query}",
+}
+
+
+def _tool_filler(function_calls) -> str:
+    """Build a spoken filler for the first tool call in a batch.
+
+    Returns an empty string if no specific filler can be derived, in which
+    case the bot stays silent during the call — the result summary will
+    follow shortly.
+    """
+    if not function_calls:
+        return ""
+    call = function_calls[0]
+    template = _TOOL_FILLERS.get(call.function_name, "")
+    if not template:
+        return ""
+    # Arguments arrive as a JSON string in OpenAI's tool_call format.
+    try:
+        args = json.loads(call.arguments) if isinstance(call.arguments, str) else (call.arguments or {})
+    except (json.JSONDecodeError, TypeError):
+        args = {}
+    try:
+        return template.format(**args)
+    except (KeyError, IndexError):
+        return template  # fall back to bare template if args are missing
+
+
 async def run_bot(webrtc_connection) -> None:
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
@@ -140,7 +240,11 @@ async def run_bot(webrtc_connection) -> None:
                     "chat_template_kwargs": {"enable_thinking": False}
                 }
             },
-            max_completion_tokens=120,
+            # Tool-using turns need more room than pure chat. A check_node
+            # turn is roughly: 1 sentence filler + tool_call + ~50-token
+            # result + 1-sentence spoken summary. 300 tokens is comfortable
+            # headroom without letting responses drift long for voice.
+            max_completion_tokens=300,
             temperature=0.3,
         ),
     )
@@ -154,7 +258,7 @@ async def run_bot(webrtc_connection) -> None:
         ),
     )
 
-    context = LLMContext()
+    context = LLMContext(tools=list(vox_tools.ALL_TOOLS))
     context.add_message({"role": "system", "content": SYSTEM_INSTRUCTION})
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -172,6 +276,25 @@ async def run_bot(webrtc_connection) -> None:
     # "use send_app_message on your SmallWebRTCConnection instance."
     user_transcript = TranscriptForwarder(webrtc_connection, role="user")
     assistant_transcript = TranscriptForwarder(webrtc_connection, role="assistant")
+
+    # Tool-call narration: when the LLM emits one or more tool calls, push a
+    # short filler so the user isn't in silence during the SSH round-trip.
+    # Specific narration beats generic ("checking drtr's uptime" > "looking
+    # that up") — derived from the function name and arguments below.
+    @llm.event_handler("on_function_calls_started")
+    async def on_function_calls_started(_service, function_calls):
+        filler = _tool_filler(function_calls)
+        if filler:
+            from pipecat.frames.frames import TTSSpeakFrame
+            await tts.queue_frame(TTSSpeakFrame(filler))
+
+    @llm.event_handler("on_function_calls_cancelled")
+    async def on_function_calls_cancelled(_service, function_calls):
+        # Barge-in during tool execution. The worker handles cancelling the
+        # outstanding SSH call; we just log so the bot's behavior is visible
+        # in the transcript of what happened.
+        for call in function_calls:
+            logger.info(f"Tool call cancelled by barge-in: {call.function_name}")
 
     pipeline = Pipeline(
         [

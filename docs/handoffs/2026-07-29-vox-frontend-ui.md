@@ -4,6 +4,15 @@
 **For:** Frontend developer picking up the vox voice chat UI
 **Scope:** The browser-side WebRTC client at `experiments/pipecat-web-voice/static/index.html`
 
+**Your companion file:** `docs/voice-chat-evaluation.md`. That's the only
+other file you should need. Its **"Reference: shared context"** section has
+the current shape of `bot.py`, `server.py`, `static/index.html`, cluster
+topology, SSH discipline, schema defect, ADRs, and file locations. Read its
+Reference section before starting — anything you'd otherwise lack is there.
+
+If something you need isn't in either this handoff or the evaluation doc's
+Reference section, surface it as a gap before guessing.
+
 ---
 
 ## What exists right now
@@ -104,7 +113,7 @@ The frontend handles these in the `dc.onmessage` handler. **If you add new messa
 
 2. **The connect button must be re-enabled on the `connected` state.** The natural pattern is to disable it during the `getUserMedia`/offer exchange, but if you don't explicitly re-enable on `pc.onconnectionstatechange === "connected"`, it stays disabled after a successful connect. Also a bug we hit.
 
-3. **Browser mic access requires HTTPS.** `http://` origins are blocked except on `localhost`. The deployment uses `https://vox.rtr.dev/` via crtr's Caddy with DNS-01 wildcard certs (already configured — see `rtr-profile.md:152-170`). Don't change the HTTPS path.
+3. **Browser mic access requires HTTPS.** `http://` origins are blocked except on `localhost`. The deployment uses `https://vox.rtr.dev/` via crtr's Caddy with DNS-01 wildcard certs (already configured — see "Cluster topology" → "Voice-relevant ports" in the evaluation doc's Reference section). Don't change the HTTPS path.
 
 4. **ICE candidates must be queued until `pc_id` is set.** The current code uses `pc.canSendIceCandidates` and `pc.pendingIceCandidates` to handle this. Trickle ICE candidates that arrive before the POST `/api/offer` response can't be PATCHed because `pc_id` isn't known yet.
 
@@ -156,13 +165,13 @@ Then open `http://localhost:7878/` (or `http://100.64.0.2:7878/` from another ta
 ```
 experiments/pipecat-web-voice/
 ├── static/
-│   └── index.html          ← this is your file
-├── server.py               ← don't touch unless adding new API routes
-├── bot.py                  ← don't touch unless changing data-channel message shapes
+│   └── index.html          ← this is your file (shape: see Reference section in eval doc)
+├── server.py               ← don't touch unless adding new API routes (shape: see Reference)
+├── bot.py                  ← don't touch unless changing data-channel message shapes (shape: see Reference)
 └── README.md               ← deployment docs
 ```
 
-The data-channel message contract (`{"role", "text"}`) is the only coupling between frontend and bot. If you want new message types, coordinate with whoever owns `bot.py`'s `TranscriptForwarder`.
+The data-channel message contract (`{"role", "text"}`) is the only coupling between frontend and bot. If you want new message types, coordinate with whoever owns `bot.py`'s `TranscriptForwarder` — its current shape is documented in the evaluation doc's Reference section.
 
 ---
 

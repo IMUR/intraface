@@ -50,3 +50,15 @@ engine            = "llama_cpp"
 last_verified     = "2026-07-06"
 symptom           = "Failed to initialize samplers: std::exception"
 workaround        = "Use --grammar-file with a hand-maintained .gbnf (see units/extract/grammar.gbnf)"
+
+# Resolved 2026-07-29 (verification below). Retained for provenance — if the
+# defect returns after a future rebuild, this is the shape it will take.
+[defects.ik_llama_json_schema]
+engine            = "ik_llama_cpp"
+status            = "resolved"
+last_verified     = "2026-07-29"
+symptom           = "500: Unable to generate parser for this template. Automatic parser generation failed: JSON schema conversion failed: Unrecognized schema: true"
+trigger           = "Tool schemas that include `additionalProperties: true` (JSON Schema 2020-12 boolean form). Pipecat's auto-derived schemas historically included this; the OpenAI SDK still does."
+verification      = "Probed live llama-server at 127.0.0.1:7712 with three tool schemas — one with `additionalProperties: true`, one minimal (no booleans), one with typed enum arg. All three returned HTTP 200. Full tool-call roundtrip verified: model emitted `tool_calls` with correct enum args."
+mechanism_unknown = "Pinned commit (86d8e9a1) and live binary match the documented-defective commit. Binary rebuilt 2026-07-29 10:02 against the same commit. Defect is empirically gone but the upstream patch path is unverified. If the defect returns, the most likely cause is a rebuild against a different commit — re-pin or re-test."
+workaround        = "No longer needed. Pipecat's FunctionSchema.to_default_dict() does not emit the trigger regardless, so the standard tool-registration path is safe even on an unfixed server."

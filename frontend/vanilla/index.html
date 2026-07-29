@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>vox</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>vox</h1>
+    <div id="status" data-state="idle">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="status-text">idle</span>
+    </div>
+  </header>
+
+  <main id="transcript" aria-live="polite"></main>
+
+  <div id="thinking" hidden>
+    <span class="pulse" aria-hidden="true"></span>
+    <span>thinking&hellip;</span>
+  </div>
+
+  <footer>
+    <div id="meter" title="mic input level"><div id="meter-fill"></div></div>
+    <div class="buttons">
+      <button id="clear" type="button" title="Clear local history">clear</button>
+      <button id="connect" type="button">connect</button>
+    </div>
+  </footer>
+
+  <!-- Remote bot audio lands here (surface doc §3.5). -->
+  <audio id="remote" autoplay></audio>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

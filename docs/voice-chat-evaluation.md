@@ -180,7 +180,10 @@ All criteria pass.
 ## Open follow-ups (priority order)
 
 1. **Agent capabilities** — tools, identity (`AGENTS.md`), self-awareness.
-   See `docs/handoffs/2026-07-29-vox-agent-capabilities.md`.
+   **Layer 1 (read-only cluster ops) shipped 2026-07-29.** Layers 2–5
+   (filesystem, web search, Pi delegation, modes) are designed but not yet
+   implemented — see `experiments/pipecat-web-voice/AGENTS.md` for the design.
+   See `docs/handoffs/2026-07-29-vox-agent-capabilities.md` for original scope.
 2. **Frontend improvements** — Markdown, persistence, voice selection.
    See `docs/handoffs/2026-07-29-vox-frontend-ui.md`.
 3. **Systemd unit for the bot process** — survive reboots.
@@ -192,6 +195,285 @@ All criteria pass.
    libraries). Blocked by Python 3.13 incompatibility with `chatterstream-tts`
    (requires 3.10/3.11); `chatterbox-streaming` is compatible but
    introduces a maintained-fork dependency.
+
+---
+
+# Reference: shared context for handoff recipients
+
+This section exists so that the handoff documents
+(`docs/handoffs/2026-07-29-vox-*.md`) can be paired with this single
+evaluation file as their only companion. Everything a fresh agent needs
+beyond what's in their handoff should be here. If it's not here, treat the
+absence as a finding and surface it.
+
+## bot.py — current shape (verified 2026-07-29)
+
+```text
+experiments/pipecat-web-voice/bot.py — 205 LOC
+
+  imports
+  env vars:
+    PARAKEET_URL     default http://100.64.0.3:7733/v1
+    CHATTERBOX_URL   default http://100.64.0.3:7744/v1
+    LLAMA_URL        default http://127.0.0.1:7712/v1
+    LLAMA_MODEL      default qwen3.6-uncensored-q6-k-p
+
+  SYSTEM_INSTRUCTION:
+    "You are a conversational voice assistant. Your output is converted to
+     speech, so use plain spoken language with no Markdown, no lists, no
+     headings, and no citations. Keep responses short — typically one or
+     two sentences. Answer directly."
+
+  class TranscriptForwarder(FrameProcessor):
+    role="user":     sits between STT and user_aggregator
+                     emits on TranscriptionFrame
+    role="assistant": sits between LLM and TTS
+                      accumulates TextFrames between LLMFullResponseStart/End
+    _send(): calls webrtc_connection.send_app_message({"role", "text"})
+             (NOT transport.send_message — that was a bug we hit)
+
+  async def run_bot(webrtc_connection):
+    transport = SmallWebRTCTransport(audio_in=True, audio_out=True, audio_out_10ms_chunks=2)
+    stt = OpenAISTTService(base_url=PARAKEET_URL, model="parakeet-tdt-0.6b-v2")
+    llm = OpenAILLMService(base_url=LLAMA_URL, model=LLAMA_MODEL,
+                           settings=Settings(extra={"extra_body": {
+                               "chat_template_kwargs": {"enable_thinking": False}
+                           }}, max_completion_tokens=120, temperature=0.3))
+    tts = OpenAITTSService(base_url=CHATTERBOX_URL, model="chatterbox-turbo", voice="alloy")
+    context = LLMContext() + system message
+    user_agg, assistant_agg = LLMContextAggregatorPair(context, realtime=False,
+                                                        user_params=(vad=SileroVADAnalyzer()))
+
+    pipeline order:
+      transport.input → stt → user_transcript → user_aggregator →
+      llm → assistant_transcript → tts → transport.output → assistant_aggregator
+
+    worker = PipelineWorker(pipeline, PipelineParams(enable_metrics=True))
+    on_client_disconnected handler cancels worker
+    runner = WorkerRunner(handle_sigint=False)
+```
+
+No tools registered today. `LLMContext` is constructed with default tools
+(empty). When adding tools, pass them in the `LLMContext(tools=[...])`
+constructor (see pipecat function calling docs).
+
+> **Update 2026-07-29:** Layer 1 tools are now registered. `bot.py` constructs
+> `LLMContext(tools=list(vox_tools.ALL_TOOLS))` and includes a
+> `on_function_calls_started` filler hook. See `tools.py` for the four
+> registered functions (`check_node`, `list_services`, `get_log_tail`,
+> `get_port_state`) and `AGENTS.md` for vox's identity. The shape summary
+> above reflects the pre-Layer-1 state for historical reference.
+
+## server.py — current shape
+
+```text
+experiments/pipecat-web-voice/server.py — 77 LOC
+
+FastAPI app on port 7878, host 0.0.0.0.
+Mounts /static/* via StaticFiles.
+Routes:
+  POST /api/offer     SmallWebRTCRequest → SmallWebRTCRequestHandler
+                      spawns run_bot(connection) as background task
+  PATCH /api/offer    SmallWebRTCPatchRequest → trickle ICE
+  GET  /              serves static/index.html
+```
+
+## static/index.html — current shape
+
+```text
+experiments/pipecat-web-voice/static/index.html — 281 LOC
+
+Single self-contained file. No build step, no framework.
+Dark theme via CSS custom properties. Two sections:
+  #controls      status dot + status text + connect/disconnect button
+  #transcript    scrollable div; turns appended as styled divs by JS
+  <audio>        hidden, autoplay, fed by pc.ontrack
+
+JS functions:
+  connect()              getUserMedia → createPeerConnection
+  createPeerConnection() new RTCPeerConnection, iceServers=[STUN only]
+                         creates data channel "pipecat" BEFORE createOffer
+                         addTransceiver audio (sendrecv) + video (sendrecv)
+                         POSTs /api/offer, handles answer, queues ICE
+  disconnect()           closes pc, resets UI
+  addTurn(role, text)    appends turn div to #transcript
+  sendIceCandidate()     PATCH /api/offer with {pc_id, candidates:[...]}
+
+Data channel message shape (server→client):
+  {"role": "user" | "assistant", "text": "<transcript text>"}
+```
+
+## Cluster topology (relevant facts)
+
+The voice bot's tools and identity work reference these. **Authoritative
+source: `rtr-profile.md`** — what's here is a minimal summary current as of
+2026-07-29. If rtr-profile.md disagrees with reality, reality wins; surface
+the drift.
+
+### Nodes (4 total, all on tailnet 100.64.0.0/24)
+
+| Node | Tailnet IP | LAN IP | Arch | OS | Role |
+|---|---|---|---|---|---|
+| prtr (projector) | 100.64.0.2 | 192.168.254.22 | x86_64 | Debian 13 | Compute, AI inference, bot host |
+| drtr (director) | 100.64.0.3 | 192.168.254.33 | x86_64 | Debian 13 | GPU inference, voice STT/TTS |
+| crtr (cooperator) | 100.64.0.4 | 192.168.254.11 | arm64 | Debian 13 | Edge ingress, Caddy, cluster ops |
+| trtr (terminator) | 100.64.0.1 | 192.168.254.107 | arm64 | macOS 26.5 | Workstation, cluster entry-point |
+
+### Cluster port block model
+
+| Block | Range | Category |
+|---|---|---|
+| Daemon | `44`** | Engine services, gateways |
+| WebUI | `55`** | Browser-facing UIs |
+| Data | `66`** | Stores, caches |
+| AI | `77`** | LLM, STT, TTS, embeddings |
+
+### Voice-relevant ports (verified live 2026-07-29)
+
+| Port | Bind | Service | Node |
+|---|---|---|---|
+| 7878 | 0.0.0.0 | pipecat bot (FastAPI + WebRTC signaling) | prtr |
+| 7712 | 127.0.0.1 | llama-server (Qwen3.6 Q6_K_P) | prtr |
+| 7733 | 0.0.0.0 | Parakeet STT | drtr |
+| 7744 | 0.0.0.0 | Chatterbox TTS (streaming) | drtr |
+| 5511 | 127.0.0.1 | XTDB v2.1.0 (pgwire, available for future history) | prtr |
+| 443 | 192.168.254.10 | Caddy (vox.rtr.dev reverse proxy) | crtr |
+
+### SSH aliases from prtr (passwordless, ControlMaster auto)
+
+| Alias | Resolves to | User |
+|---|---|---|
+| `c` / `crtr` | 100.64.0.4 / 192.168.254.11 | crtr |
+| `p` / `prtr` | 100.64.0.2 / 192.168.254.22 | prtr |
+| `d` / `drtr` | 100.64.0.3 / 192.168.254.33 | drtr |
+| `t` / `trtr` | 100.64.0.1 / 192.168.254.107 | trtr |
+
+## SSH execution discipline
+
+Cluster convention (from `rtr-profile.md`):
+
+- **Bash is the default login shell on Linux nodes.** `ssh <node> '<cmd>'`
+  works directly — no need for `bash -l -c` or `zsh -l -c`.
+- **Don't use `zsh -l -c` for non-interactive ops** — unreliable on Linux
+  nodes (zsh is for interactive use only).
+- **ControlMaster auto multiplexes** — repeated SSH calls reuse one
+  connection (~10 ms after first).
+- **Stale ControlMaster sockets** can occur after node reboot. If SSH fails
+  with "Connection closed", run `ssh -O exit <node>` then retry.
+- **trtr is macOS** — may sleep. SSH can hang or fail. Tools targeting trtr
+  should use a short timeout (3-5 s) and return clean "unreachable" rather
+  than raise.
+- **Spawn pattern:** `asyncio.create_subprocess_exec("ssh", "<alias>",
+  "<cmd>")` — never `shell=True`, never `sh -c`.
+
+## llama-server JSON schema defect (cross-cutting)
+
+> **STATUS (2026-07-29): RESOLVED.** Verified live — see `engines.toml
+> [defects.ik_llama_json_schema]` for the verification record. The text
+> below is the historical description of the defect, retained for
+> provenance. Layer 1 tools are deployed and working.
+
+**Symptom (when registering tools via OpenAI function calling):**
+
+```
+Error: 500: {"code":500,"message":"Unable to generate parser for this
+template. Automatic parser generation failed: JSON schema conversion
+failed:\nUnrecognized schema: true","type":"server_error"}
+```
+
+**Root cause:** ik_llama.cpp's `common/json-schema-to-grammar.cpp` (at the
+pinned commit `86d8e9a1`, 2026-07-06) doesn't handle JSON Schema 2020-12
+boolean values (`true` means "accept any value," `false` means "reject all").
+The OpenAI SDK's auto-derived tool schemas include `additionalProperties:
+true` on object types, which triggers the defect.
+
+**Authoritative documentation:** `engines.toml [defects.ik_llama_json_schema]`
+(in the project root). Also documented in HANDOFF.md item #1.
+
+**Fix status (2026-07-29):** RESOLVED. Probed the live server with three
+schema shapes including `additionalProperties: true` — all returned HTTP
+200. Full tool-call roundtrip verified end-to-end. Mechanism unclear:
+binary mtime matches the pinned commit, so the defect self-resolved
+without an obvious code change. Pipecat's `FunctionSchema.to_default_dict()`
+also does not emit the trigger, so the standard tool path is safe
+regardless.
+
+**Does not affect** the current voice path — Layer 1 tools are deployed
+and verified working.
+
+## Engines and versions
+
+| Engine | Version | Pinned commit | Role |
+|---|---|---|---|
+| `pipecat-ai` | 1.6.0 | n/a (PyPI) | Voice pipeline framework |
+| `chatterbox` | 0.1.7 | n/a (PyPI) | TTS model (Chatterbox-Turbo) |
+| `nemo` | 2.7.2 | n/a (PyPI) | Parakeet STT model host |
+| `ik_llama.cpp` | 4681 | `86d8e9a13c4d6e6fead9c9489ade4b0d283afc53` | llama-server (Core) |
+| `llama.cpp` | 9861 | `a2d90e887ac0f79accaa095f30a71a907f7f3536` | llama-cli (Units, not used by vox today) |
+
+Source: `engines.toml` in project root. **If a future agent rebuilds the
+engine, they must update `engines.toml` with the new commit.**
+
+## Where things live
+
+```text
+~/prj/intraface/
+├── experiments/
+│   ├── pipecat-web-voice/    ← current voice bot (live)
+│   │   ├── bot.py
+│   │   ├── server.py
+│   │   ├── static/index.html
+│   │   ├── tests/test_pipeline_construction.py
+│   │   ├── pyproject.toml
+│   │   ├── uv.lock
+│   │   └── README.md
+│   ├── livekit-voice-agent/  ← superseded (reference only)
+│   └── a2a-voice-bridge/     ← superseded (reference only, A2A facade not running)
+├── docs/
+│   ├── voice-chat-evaluation.md       ← this file
+│   ├── handoffs/
+│   │   ├── 2026-07-29-vox-frontend-ui.md
+│   │   └── 2026-07-29-vox-agent-capabilities.md
+│   ├── charter.md          ← conceptual model (5 tests, Executor/Core/Unit taxonomy)
+│   ├── features.md         ← Unit backlog (pre-charter vocab; "specialist" = "Unit")
+│   ├── core-model-baselines/
+│   └── decisions/          ← ADRs 0001-0007
+├── HANDOFF.md              ← project-wide handoff (may be stale; verify against live state)
+├── rtr-profile.md          ← authoritative cluster reference
+└── engines.toml            ← pinned engine commits + defects
+
+/opt/services/  (on drtr)
+├── parakeet-stt/
+│   ├── app.py
+│   └── .venv/              ← Python 3.13.5, nemo 2.7.2
+└── chatterbox-tts/
+    ├── app.py              ← v2 with streaming (original at app.py.bak.20260729-111501)
+    └── .venv/              ← Python 3.13.5, chatterbox 0.1.7
+
+~/.intraface/
+├── models/
+│   ├── core/
+│   │   └── qwen3.6-35b-a3b-uncensored-aggressive/
+│   │       └── Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+│   └── unit/               ← LFM2.5 weights (extract Unit, separate from vox)
+└── state/
+    ├── pipecat-web-voice.log
+    ├── core-q6-k-p.log
+    └── vox-monitor/        ← disabled systemd user service for log watching
+```
+
+## Architectural decisions in force (ADRs)
+
+| ADR | Status | What it means for vox |
+|---|---|---|
+| 0001 | Accepted | Model custody at `~/.intraface/models/{core,unit}/` — vox uses core/, doesn't touch unit/ |
+| 0002 | Superseded by 0007 | Originally "dev tree is runtime target" — still permits prtr-local code (like vox) running from the checkout |
+| 0003 | Accepted | Units invoke llama.cpp as isolated subprocesses — not directly relevant to vox |
+| 0006 | Accepted | Rejected Fun-Audio-Chat as Core candidate; chose modular LiveKit/Parakeet/Pi/Chatterbox direction — now evolved to pipecat |
+| 0007 | Accepted | Canonical source on prtr; cross-node deployment explicit per node — vox runs from prtr source, no rsync needed today |
+
+Don't violate these without writing a superseding ADR. Read the actual ADR
+files in `docs/decisions/` if a decision seems to conflict with reality.
 
 ---
 
