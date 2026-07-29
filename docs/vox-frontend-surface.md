@@ -7,11 +7,11 @@ without reading the current `index.html`. If your design satisfies every
 "MUST" here and accounts for every behavior in "Runtime characteristics,"
 it will work against the live backend.
 
-**Source of truth:** Derived exclusively from
-`docs/voice-chat-evaluation.md` and
-`docs/handoffs/2026-07-29-vox-frontend-ui.md` (both dated 2026-07-29).
-Not yet re-verified against live code; where the docs and reality drift,
-reality wins — surface the drift.
+**Source of truth:** Derived from `docs/voice-chat-evaluation.md` and
+`docs/handoffs/2026-07-29-vox-frontend-ui.md`, then **re-verified against
+live source on 2026-07-30** (server.py 111 LOC, bot.py 328 LOC, tools.py
+891 LOC). Where the docs and reality drift, reality wins — surface the
+drift.
 
 **Coordination note:** `bot.py` and `server.py` are owned by another
 workstream. Everything under "Backend-coupled extension points" requires
@@ -26,10 +26,10 @@ coordination before a frontend can rely on it.
 | Public URL | `https://vox.rtr.dev/` |
 | Edge | crtr:443 Caddy, DNS-01 wildcard certs, `reverse_proxy → 100.64.0.2:7878` |
 | Origin | prtr:7878, FastAPI (`server.py`, 77 LOC), host `0.0.0.0` |
-| Frontend file | `experiments/pipecat-web-voice/static/index.html` — single self-contained file |
-| Build step | **None.** No framework, no package.json. Vanilla JS + CSS |
-| Serving | `GET /` reads the HTML fresh from disk per request; `/static/*` via StaticFiles |
-| Dev loop | Edit file, refresh browser. No server restart |
+| Frontend source | `frontend/` (repo root) — React + Vite app, builds to `frontend/dist/`. Legacy zero-dep client at `frontend/vanilla/` |
+| Build step | Vite (`npm run build`) for the React app; none for the vanilla client |
+| Serving | `GET /` serves the React `dist/index.html`; `/assets/*` hashed build assets; `/vanilla/*` vanilla fallback; `/static/*` legacy mount retained |
+| Dev loop | React: `npm run dev` in `frontend/` (Vite proxies `/api` → prtr:7878). Vanilla: edit-and-refresh, no restart |
 | Local dev | `cd experiments/pipecat-web-voice && uv sync && uv run python server.py --host 0.0.0.0 --port 7878` |
 | Backend log | `~/.intraface/state/pipecat-web-voice.log` on prtr |
 
@@ -37,9 +37,6 @@ coordination before a frontend can rely on it.
 
 - HTTPS is mandatory for mic access (`getUserMedia` is blocked on `http://`
   origins except `localhost`). Do not change the HTTPS path.
-- One-file-no-build is the current convention, not a hard requirement — but
-  introducing a build step changes the deploy story and should be a
-  deliberate decision, not an accident.
 - The frontend talks to exactly one origin (the FastAPI signaling server).
   It never touches the model services (STT/LLM/TTS) directly.
 
@@ -116,31 +113,26 @@ redesign that violates any of them fails silently or times out.
 
 ## 4. Data channel contract
 
-Direction today: **server → client only.** The client never sends
-application messages on the channel.
+Two protocols share the data channel today:
 
-Message shape (JSON):
+**Primary: RTVI** (`label: "rtvi-ai"` envelopes, bidirectional). Active by
+default via `PipelineWorker(enable_rtvi=True)` — no bot.py change was ever
+needed. The client SDK sends `client-ready` and can send `send-text`;
+the server emits the full typed event stream: `bot-ready`,
+`user-started/stopped-speaking`, `vad-user-started/stopped-speaking`,
+`user-transcription`, `bot-llm-text` (streaming tokens), `bot-output`
+(sentence-aggregated, with `spoken`/`unspoken` split for karaoke sync),
+`bot-started/stopped-speaking`, `bot-transcription`, `metrics`, `error`,
+plus function-call events (`llm-function-call-*`).
+
+**Legacy: raw turn messages** (server → client only):
 ```json
 { "role": "user" | "assistant", "text": "<transcript text>" }
 ```
-
-Semantics:
-
-- `role: "user"` — emitted once per completed user turn, after Smart Turn
-  reports `COMPLETE` and Parakeet transcribes. One message per turn, not
-  incremental.
-- `role: "assistant"` — emitted once per completed assistant response
-  (accumulated between `LLMFullResponseStart/End`). One message per turn,
-  not token-streamed.
-
-**Consequence for design:** the transcript UI receives turns atomically.
-There is currently no partial/streaming transcript data available to the
-frontend — neither partial STT hypotheses nor streaming LLM tokens. Any
-"typewriter" or live-caption design needs a backend change (see §7).
-
-Sender is the `TranscriptForwarder` class in `bot.py` (two instances:
+Sent by the `TranscriptForwarder` class in `bot.py` (two instances:
 user-side between STT and user aggregator; assistant-side between LLM and
-TTS). It uses `webrtc_connection.send_app_message(...)`.
+TTS), kept for the vanilla client at `/vanilla/`. One message per completed
+turn, not incremental. New work should consume RTVI, not this.
 
 ---
 
@@ -191,17 +183,19 @@ minimal UI has none.
 - **One bot per connection.** No shared state across users or sessions.
 - **No auth.** Anyone who can reach `vox.rtr.dev` on the tailnet can use it.
 - **Assistant output style is constrained by system prompt:** plain spoken
-  language, no Markdown, no lists, short responses. Markdown rendering in
-  the UI is forward-looking, not currently load-bearing.
+  language, short responses, tool-first behavior on cluster queries. The
+  bot has an identity ("Vox") and read-only cluster tools (node health,
+  services, logs, ports, filesystem reads — see `PROGRESS.md`).
+  `max_completion_tokens` is 300.
 - **Bot durability:** the backend is a `nohup` process; it can die. UI
   should treat connection failure as a normal, recoverable state.
 
 ### What the frontend cannot control today
 
-- No client→server messages other than ICE (no settings, no barge-in
-  signaling, no text input path)
 - Voice selection: the `voice` field is sent but Chatterbox ignores it
 - No way to request history, threads, or identity — none exist server-side
+- Settings (VAD sensitivity, TTS speed): no plumbing yet, though RTVI
+  `client-message` is the natural channel when added
 
 ---
 
@@ -238,9 +232,9 @@ A redesign that wants any of these must coordinate with the `bot.py` /
 4. Mic requires HTTPS; `http://localhost` is the sole exception (§1).
 5. `TranscriptForwarder` must use `send_app_message`, not
    `transport.send_message` (backend-side, noted for anyone touching §7).
-6. If tools are ever added to the bot: llama-server has a JSON-schema
-   defect (boolean schema values) — hand-write `FunctionSchema`s. Not a
-   frontend concern today; see `engines.toml [defects.json_schema]`.
+6. ~~llama-server JSON-schema defect~~ — **resolved** (stamped in
+   `engines.toml`). The bot registers tools via `FunctionSchema`
+   auto-derivation today. Historical note only.
 
 ---
 
@@ -260,8 +254,7 @@ layout, theme, framework choice, transcript rendering, localStorage
 history, audio metering, reconnection UX, export/copy, mobile UX.
 
 **Fixed by the backend:** the signaling API shapes (§2), the WebRTC
-requirements (§3), the data channel name and message shape (§4), the
-latency profile (§6), turn-atomic transcript delivery, always-on VAD +
-barge-in, no server persistence, no auth.
+requirements (§3), the data channel name `"pipecat"` (§4), the latency
+profile (§6), always-on VAD + barge-in, no server persistence, no auth.
 
 **Negotiable with coordination:** anything in §7.

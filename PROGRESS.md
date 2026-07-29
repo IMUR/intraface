@@ -5,7 +5,7 @@ layers. Source of truth for what's done, what's in progress, and what's
 blocked. Companion to `experiments/pipecat-web-voice/AGENTS.md` (design)
 and `docs/handoffs/2026-07-29-vox-agent-capabilities.md` (original scope).
 
-**Last updated:** 2026-07-29 (frontend swap + RTVI discovery)
+**Last updated:** 2026-07-29 (Layer 3 web search shipped)
 
 ---
 
@@ -62,13 +62,18 @@ Status: **shipped** (2026-07-29)
 
 ## Layer 3 — Web search
 
-Status: **planned** (not started)
+Status: **shipped** (2026-07-29)
 
-- [ ] `web_search(query, intent)` against `sch.rtr.dev` SearXNG
-- [ ] Intent enum mapping to engine recipes from `~/.pi/agent/AGENTS.md`
-- [ ] Result shaping — top 5 results, title + url + snippet
-- [ ] Tests added
-- [ ] Wired into `bot.py` with filler entry
+- [x] `web_search(query, intent)` against `sch.rtr.dev` SearXNG
+- [x] Intent enum mapping: general / code / docs / research / ml
+- [x] Result shaping — top 3 results with title, domain, URL, and capped snippet
+- [x] Six Layer 3 checks added; complete tool suite passes
+- [x] Wired into `bot.py` with query-specific filler
+- [x] System prompt requires web search for current docs, versions, papers,
+      packages, and other facts likely stale in model training
+- [x] End-to-end LLM probe selected correct intents for general, docs, and
+      research queries; Layer 1/2 regression queries still selected correctly
+- [x] Bot restarted with Layer 3 code (PID 1346362)
 - [ ] `fetch_page(url)` deferred — needs "summarize this" pattern proven first
 
 ## Layer 4 — Pi delegation

@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<style>
+@keyframes vx-pulse { 0%,100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.06); opacity: 1; } }
+@keyframes vx-pulse-fast { 0%,100% { transform: scale(1); } 50% { transform: scale(1.14); } }
+@keyframes vx-spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes vx-bar { 0%,100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+@keyframes vx-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+@keyframes vx-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+body { margin: 0; background: oklch(0.16 0.012 250); }
+* { box-sizing: border-box; }
+</style>
+</helmet>
+
+<div style="{{ rootStyle }}" data-screen-label="vox-root">
+
+  <div style="position:absolute;top:18px;left:22px;font:600 12px/1 ui-monospace,'SF Mono','Cascadia Code',monospace;letter-spacing:0.12em;color:oklch(0.6 0.01 250);z-index:20">VOX</div>
+
+  <div style="position:absolute;top:16px;right:20px;display:flex;gap:8px;z-index:20">
+    <sc-if value="{{ isConnectedish }}" hint-placeholder-val="{{ false }}">
+      <button style="{{ muteButtonStyle }}" onClick="{{ toggleMute }}">{{ muteLabel }}</button>
+      <button style="{{ metricsButtonStyle }}" onClick="{{ toggleMetrics }}">METRICS</button>
+    </sc-if>
+    <button style="{{ settingsButtonStyle }}" onClick="{{ toggleSettings }}">SETTINGS</button>
+    <sc-if value="{{ isConnectedish }}" hint-placeholder-val="{{ false }}">
+      <button style="{{ endButtonStyle }}" onClick="{{ onEndClick }}">END</button>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{ isTerminal }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;text-align:center" data-screen-label="terminal-state">
+      <div style="{{ orbWrapStyle }}"><div style="{{ orbCoreStyle }}"></div></div>
+      <div style="font:600 15px/1.4 ui-monospace,monospace;letter-spacing:0.08em;color:{{ statusColor }}">{{ statusLabel }}</div>
+      <div style="font:15px/1.5 Helvetica,'Helvetica Neue',sans-serif;color:oklch(0.6 0.01 250);max-width:360px">{{ terminalReason }}</div>
+      <button style="{{ primaryButtonStyle }}" onClick="{{ resetToIdle }}">Start new session</button>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showIdleScreen }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:24px" data-screen-label="idle-connect">
+      <div style="{{ orbWrapStyle }}"><div style="{{ orbCoreStyle }}"></div></div>
+      <div style="font:600 13px/1 ui-monospace,monospace;letter-spacing:0.1em;color:{{ statusColor }}">{{ statusLabel }}</div>
+      <button style="{{ primaryButtonStyle }}" onClick="{{ connect }}">Connect</button>
+      <div style="font:12.5px/1.5 Helvetica,'Helvetica Neue',sans-serif;color:oklch(0.5 0.01 250);max-width:300px;text-align:center">No history is kept. Closing this tab ends the conversation.</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showReadyScreen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px" data-screen-label="ready-listening">
+      <div style="{{ orbWrapStyle }}">
+        <div style="{{ orbCoreStyle }}"></div>
+        <div style="{{ waveformRowStyle }}">
+          <sc-for list="{{ waveformBars }}" as="bar" hint-placeholder-count="7">
+            <div style="{{ bar.style }}"></div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="font:600 13px/1 ui-monospace,monospace;letter-spacing:0.1em;color:{{ statusColor }}">{{ statusLabel }}</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showTranscriptScreen }}" hint-placeholder-val="{{ false }}">
+    <div style="display:flex;flex-direction:column;height:100%;padding-top:60px" data-screen-label="transcript-view">
+      <div style="display:flex;align-items:center;justify-content:center;gap:14px;padding:6px 0 16px;flex:none">
+        <div style="{{ compactOrbWrapStyle }}">
+          <div style="{{ compactOrbCoreStyle }}"></div>
+          <div style="{{ waveformRowCompactStyle }}">
+            <sc-for list="{{ waveformBars }}" as="bar" hint-placeholder-count="7">
+              <div style="{{ bar.compactStyle }}"></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="font:600 11.5px/1 ui-monospace,monospace;letter-spacing:0.1em;color:{{ statusColor }}">{{ statusLabel }}</div>
+      </div>
+
+      <div style="flex:1;overflow-y:auto;padding:8px 20px 24px;display:flex;flex-direction:column;gap:4px;max-width:720px;margin:0 auto;width:100%">
+        <sc-for list="{{ turns }}" as="turn" hint-placeholder-count="2">
+
+          <sc-if value="{{ turn.isUser }}" hint-placeholder-val="{{ false }}">
+            <div style="align-self:flex-end;max-width:80%;display:flex;flex-direction:column;align-items:flex-end;gap:3px;padding:10px 2px;animation:vx-fade-in 0.3s ease">
+              <div style="font:11px/1 ui-monospace,monospace;color:oklch(0.5 0.01 250);letter-spacing:0.04em">YOU · {{ turn.time }}</div>
+              <div style="font:16px/1.5 Helvetica,'Helvetica Neue',sans-serif;color:oklch(0.94 0.01 250);text-align:right">{{ turn.text }}</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ turn.isAssistant }}" hint-placeholder-val="{{ false }}">
+            <div style="align-self:flex-start;max-width:84%;display:flex;flex-direction:column;gap:3px;padding:10px 2px;animation:vx-fade-in 0.3s ease">
+              <div style="font:11px/1 ui-monospace,monospace;color:oklch(0.5 0.01 250);letter-spacing:0.04em">VOX · {{ turn.time }} · {{ turn.replyModeLabel }}</div>
+              <div style="font:16px/1.6 Helvetica,'Helvetica Neue',sans-serif;color:oklch(0.9 0.01 250)">{{ turn.displayText }}<sc-if value="{{ turn.revealing }}" hint-placeholder-val="{{ false }}"><span style="display:inline-block;width:8px;height:16px;margin-left:2px;background:oklch(0.75 0.14 200);animation:vx-blink 1s step-end infinite;vertical-align:text-bottom"></span></sc-if></div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ turn.isTool }}" hint-placeholder-val="{{ false }}">
+            <div style="align-self:stretch;margin:6px 0;border:1px solid oklch(1 0 0 / 10%);border-radius:10px;background:oklch(0.2 0.014 250);overflow:hidden;animation:vx-fade-in 0.3s ease">
+              <div style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer" onClick="{{ turn.onToggle }}">
+                <div style="{{ turn.statusDotStyle }}"></div>
+                <div style="flex:1;font:13px/1.3 ui-monospace,monospace;color:oklch(0.85 0.01 250)">{{ turn.name }}</div>
+                <div style="font:11px/1 ui-monospace,monospace;color:oklch(0.55 0.01 250);letter-spacing:0.06em">{{ turn.statusLabel }}</div>
+                <div style="font:13px/1 ui-monospace,monospace;color:oklch(0.5 0.01 250);transform:{{ turn.chevronRotate }};transition:transform 0.15s">▾</div>
+              </div>
+              <sc-if value="{{ turn.expanded }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:8px">
+                  <div>
+                    <div style="font:10.5px/1 ui-monospace,monospace;color:oklch(0.5 0.01 250);letter-spacing:0.06em;margin-bottom:4px">ARGS</div>
+                    <pre style="margin:0;font:12px/1.5 ui-monospace,monospace;color:oklch(0.72 0.01 250);white-space:pre-wrap;background:oklch(0.14 0.012 250);border-radius:6px;padding:8px 10px">{{ turn.argsDisplay }}</pre>
+                  </div>
+                  <sc-if value="{{ turn.done }}" hint-placeholder-val="{{ false }}">
+                    <div>
+                      <div style="font:10.5px/1 ui-monospace,monospace;color:oklch(0.5 0.01 250);letter-spacing:0.06em;margin-bottom:4px">RESULT</div>
+                      <pre style="margin:0;font:12px/1.5 ui-monospace,monospace;color:oklch(0.78 0.01 250);white-space:pre-wrap;background:oklch(0.14 0.012 250);border-radius:6px;padding:8px 10px">{{ turn.result }}</pre>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ turn.isSystem }}" hint-placeholder-val="{{ false }}">
+            <div style="align-self:center;font:11.5px/1 ui-monospace,monospace;color:oklch(0.48 0.01 250);letter-spacing:0.04em;padding:10px 0">— {{ turn.text }} —</div>
+          </sc-if>
+
+        </sc-for>
+      </div>
+
+      <div style="flex:none;padding:14px 20px 20px;display:flex;justify-content:center">
+        <div style="display:flex;gap:8px;max-width:720px;width:100%;align-items:center">
+          <button style="{{ replyModeButtonStyle }}" onClick="{{ toggleReplyMode }}">{{ replyModeLabel }}</button>
+          <input style="{{ composerInputStyle }}" value="{{ composerText }}" onChange="{{ onComposerChange }}" onKeyDown="{{ onComposerKeyDown }}" placeholder="Type a message — talking works anytime"></input>
+          <button style="{{ sendButtonStyle }}" onClick="{{ sendText }}" disabled="{{ sendDisabled }}">Send</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showSettings }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:56px;right:20px;width:250px;background:oklch(0.2 0.014 250);border:1px solid oklch(1 0 0 / 10%);border-radius:12px;padding:16px;z-index:30;display:flex;flex-direction:column;gap:14px;box-shadow:0 12px 32px oklch(0 0 0 / 40%)">
+      <div style="font:600 11px/1 ui-monospace,monospace;letter-spacing:0.08em;color:oklch(0.6 0.01 250)">DISPLAY MODE</div>
+      <div style="display:flex;gap:6px">
+        <sc-for list="{{ displayModeOptions }}" as="opt" hint-placeholder-count="3">
+          <button style="{{ opt.style }}" onClick="{{ opt.onClick }}">{{ opt.label }}</button>
+        </sc-for>
+      </div>
+      <div style="font:11px/1.5 Helvetica,sans-serif;color:oklch(0.5 0.01 250)">Karaoke highlights each word as it's spoken. Captions reveal a sentence at a time. Instant shows the full reply at once.</div>
+      <div style="height:1px;background:oklch(1 0 0 / 8%)"></div>
+      <div style="font:600 11px/1 ui-monospace,monospace;letter-spacing:0.08em;color:oklch(0.6 0.01 250)">TEXT REPLY MODE</div>
+      <div style="font:11px/1.5 Helvetica,sans-serif;color:oklch(0.5 0.01 250)">Currently: {{ replyModeLabel }} — toggle from the composer bar.</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showMetrics }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:56px;right:20px;width:230px;background:oklch(0.2 0.014 250);border:1px solid oklch(1 0 0 / 10%);border-radius:12px;padding:16px;z-index:30;display:flex;flex-direction:column;gap:10px;box-shadow:0 12px 32px oklch(0 0 0 / 40%)">
+      <div style="font:600 11px/1 ui-monospace,monospace;letter-spacing:0.08em;color:oklch(0.6 0.01 250)">LATENCY (LAST TURN)</div>
+      <sc-for list="{{ metricsRows }}" as="row" hint-placeholder-count="4">
+        <div style="display:flex;justify-content:space-between;font:12px/1 ui-monospace,monospace">
+          <span style="color:oklch(0.55 0.01 250)">{{ row.label }}</span>
+          <span style="color:oklch(0.85 0.01 250)">{{ row.value }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <div style="position:absolute;bottom:14px;left:20px;z-index:20">
+    <button style="{{ demoButtonStyle }}" onClick="{{ toggleDemo }}">DEMO</button>
+    <sc-if value="{{ showDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;bottom:36px;left:0;width:230px;background:oklch(0.2 0.014 250);border:1px solid oklch(1 0 0 / 10%);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;box-shadow:0 12px 32px oklch(0 0 0 / 40%)">
+        <div style="font:10.5px/1.4 ui-monospace,monospace;color:oklch(0.5 0.01 250);padding:2px 4px 4px">Prototype-only controls — simulate events with no real backend</div>
+        <button style="{{ demoItemStyle }}" onClick="{{ simulateVoiceTurn }}">Simulate voice turn (cluster query)</button>
+        <button style="{{ demoItemStyle }}" onClick="{{ simulateBotDeath }}">Simulate bot process death</button>
+        <button style="{{ demoItemStyle }}" onClick="{{ simulateErrorState }}">Simulate connection error</button>
+      </div>
+    </sc-if>
+  </div>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 900, &quot;height&quot;: 640}, &quot;defaultDisplayMode&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;default&quot;: &quot;captions&quot;, &quot;options&quot;: [&quot;karaoke&quot;, &quot;captions&quot;, &quot;instant&quot;], &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Behavior&quot;}, &quot;defaultReplyMode&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;default&quot;: &quot;silent&quot;, &quot;options&quot;: [&quot;silent&quot;, &quot;spoken&quot;], &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Behavior&quot;}, &quot;showMetricsDefault&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Behavior&quot;}}">
+const CYAN = '200';
+const AMBER = '70';
+const ACCENT_C = 0.14;
+const ACCENT_L = 0.75;
+
+function accent(hue, l, c) { return 'oklch(' + (l ?? ACCENT_L) + ' ' + (c ?? ACCENT_C) + ' ' + hue + ')'; }
+
+class Component extends DCLogic {
+  state = {
+    phase: 'idle', // idle | connecting-mic | connecting-signal | connecting-bot | ready | user-speaking | thinking | speaking | interrupted | error | ended
+    turns: [],
+    composerText: '',
+    muted: false,
+    displayMode: this.props.defaultDisplayMode ?? 'captions',
+    replyMode: this.props.defaultReplyMode ?? 'silent', // silent | spoken
+    showSettings: false,
+    showMetrics: this.props.showMetricsDefault ?? false,
+    showDemo: false,
+    metrics: null,
+    terminalReason: '',
+  };
+
+  _nextId = 1;
+  _timers = [];
+
+  componentWillUnmount() {
+    this._timers.forEach(t => clearTimeout(t) || clearInterval(t));
+  }
+
+  _after(ms, fn) {
+    const t = setTimeout(fn, ms);
+    this._timers.push(t);
+    return t;
+  }
+  _every(ms, fn) {
+    const t = setInterval(fn, ms);
+    this._timers.push(t);
+    return t;
+  }
+
+  connect = () => {
+    this.setState({ phase: 'connecting-mic' });
+    this._after(650, () => this.setState({ phase: 'connecting-signal' }));
+    this._after(1500, () => this.setState({ phase: 'connecting-bot' }));
+    this._after(2500, () => this.setState({ phase: 'ready' }));
+  };
+
+  resetToIdle = () => {
+    this.setState({ phase: 'idle', turns: [], composerText: '', terminalReason: '', metrics: null });
+  };
+
+  toggleMute = () => this.setState(s => ({ muted: !s.muted }));
+  toggleSettings = () => this.setState(s => ({ showSettings: !s.showSettings, showMetrics: false, showDemo: false }));
+  toggleMetrics = () => this.setState(s => ({ showMetrics: !s.showMetrics, showSettings: false, showDemo: false }));
+  toggleDemo = () => this.setState(s => ({ showDemo: !s.showDemo, showSettings: false, showMetrics: false }));
+  toggleReplyMode = () => this.setState(s => ({ replyMode: s.replyMode === 'silent' ? 'spoken' : 'silent' }));
+  setDisplayMode = (mode) => this.setState({ displayMode: mode });
+
+  onEndClick = () => {
+    this.setState({ phase: 'ended', terminalReason: 'You ended the session. Starting again begins a brand-new conversation.' });
+  };
+
+  onComposerChange = (e) => this.setState({ composerText: e.target.value });
+  onComposerKeyDown = (e) => { if (e.key === 'Enter') this.sendText(); };
+
+  _splitSentences(text) {
+    return text.match(/[^.!?]+[.!?]*/g)?.map(s => s.trim()).filter(Boolean) || [text];
+  }
+
+  _toolFor(text) {
+    const t = text.toLowerCase();
+    if (t.includes('node') || t.includes('health') || t.includes('cluster')) {
+      return { name: 'cluster.node_health', args: { nodes: ['prtr', 'crtr', 'drtr'] }, result: '3 nodes healthy — prtr, crtr, drtr. No alerts.', reply: "All three nodes are healthy. No alerts on prtr, crtr, or drtr." };
+    }
+    if (t.includes('log')) {
+      return { name: 'cluster.read_logs', args: { service: 'pipecat-web-voice', lines: 20 }, result: 'Last 20 lines from pipecat-web-voice.log — no errors in the past 10 minutes.', reply: "Checked the last twenty lines of the voice service log. No errors in the past ten minutes." };
+    }
+    if (t.includes('port')) {
+      return { name: 'cluster.list_ports', args: { host: 'prtr' }, result: '7878 — FastAPI (listening)\n443 — Caddy (listening)', reply: "prtr has two ports open: 7878 for the FastAPI app, and 443 for Caddy." };
+    }
+    return null;
+  }
+
+  _pushTurn(turn) {
+    turn.id = this._nextId++;
+    this.setState(s => ({ turns: [...s.turns, turn] }));
+    return turn.id;
+  }
+
+  _patchTurn(id, patch) {
+    this.setState(s => ({ turns: s.turns.map(t => t.id === id ? { ...t, ...patch } : t) }));
+  }
+
+  _refreshMetrics() {
+    const jitter = (base, spread) => Math.round(base + (Math.random() - 0.5) * spread);
+    this.setState({
+      metrics: {
+        stt: jitter(180, 100) + ' ms',
+        ttfb: jitter(300, 80) + ' ms',
+        tts: jitter(1700, 500) + ' ms',
+        total: jitter(2500, 400) + ' ms',
+      }
+    });
+  }
+
+  _startReveal(turnId, fullText) {
+    const mode = this.state.replyMode === 'silent' ? 'instant' : this.state.displayMode;
+    if (mode === 'instant') {
+      this._patchTurn(turnId, { displayText: fullText, revealing: false });
+      this._after(300, () => this.setState({ phase: 'ready' }));
+      return;
+    }
+    const units = mode === 'karaoke' ? fullText.split(/\s+/) : this._splitSentences(fullText);
+    const gap = mode === 'karaoke' ? 130 : 650;
+    let i = 0;
+    this._patchTurn(turnId, { revealing: true, displayText: '' });
+    const iv = this._every(gap, () => {
+      i++;
+      const text = units.slice(0, i).join(' ');
+      this._patchTurn(turnId, { displayText: text });
+      if (i >= units.length) {
+        clearInterval(iv);
+        this._patchTurn(turnId, { revealing: false });
+        this.setState({ phase: 'ready' });
+      }
+    });
+  }
+
+  _respondTo(userText) {
+    this.setState({ phase: 'thinking' });
+    const tool = this._toolFor(userText);
+    this._after(900, () => {
+      if (tool) {
+        const toolId = this._pushTurn({ type: 'tool', name: tool.name, args: tool.args, status: 'running', done: false, expanded: false });
+        this._after(850, () => {
+          this._patchTurn(toolId, { status: 'done', done: true, result: tool.result });
+          this._after(400, () => {
+            const spoken = this.state.replyMode === 'spoken';
+            this.setState({ phase: spoken ? 'speaking' : 'ready' });
+            const aId = this._pushTurn({ type: 'assistant', fullText: tool.reply, displayText: '', revealing: spoken });
+            this._refreshMetrics();
+            this._startReveal(aId, tool.reply);
+          });
+        });
+      } else {
+        const reply = "Got it — noted. Ask me about node health, logs, or open ports on the cluster any time.";
+        const spoken = this.state.replyMode === 'spoken';
+        this.setState({ phase: spoken ? 'speaking' : 'ready' });
+        const aId = this._pushTurn({ type: 'assistant', fullText: reply, displayText: '', revealing: spoken });
+        this._refreshMetrics();
+        this._startReveal(aId, reply);
+      }
+    });
+  }
+
+  sendText = () => {
+    const text = this.state.composerText.trim();
+    if (!text) return;
+    this._pushTurn({ type: 'user', text });
+    this.setState({ composerText: '' });
+    this._respondTo(text);
+  };
+
+  toggleToolExpand = (id) => {
+    this.setState(s => ({ turns: s.turns.map(t => t.id === id ? { ...t, expanded: !t.expanded } : t) }));
+  };
+
+  simulateVoiceTurn = () => {
+    if (this.state.phase === 'idle' || this.state.phase === 'error' || this.state.phase === 'ended') return;
+    this.setState({ phase: 'user-speaking', showDemo: false });
+    this._after(1400, () => {
+      this._pushTurn({ type: 'user', text: "What's the status of the cluster?" });
+      this._respondTo("what's the status of the cluster health");
+    });
+  };
+
+  simulateBotDeath = () => {
+    this.setState({ phase: 'ended', terminalReason: 'The bot process ended unexpectedly. This is a normal, recoverable state — start a fresh session below.', showDemo: false });
+  };
+
+  simulateErrorState = () => {
+    this.setState({ phase: 'error', terminalReason: 'Signaling connection lost. Check the network and try again.', showDemo: false });
+  };
+
+  renderVals() {
+    const s = this.state;
+    const phase = s.phase;
+
+    const statusMap = {
+      'idle': 'DISCONNECTED',
+      'connecting-mic': 'REQUESTING MICROPHONE',
+      'connecting-signal': 'CONNECTING',
+      'connecting-bot': 'WAKING BOT',
+      'ready': 'LISTENING',
+      'user-speaking': 'HEARING YOU',
+      'thinking': 'UNDERSTANDING',
+      'speaking': 'SPEAKING',
+      'interrupted': 'INTERRUPTED',
+      'error': 'CONNECTION LOST',
+      'ended': 'SESSION ENDED',
+    };
+    const statusLabel = statusMap[phase] || phase.toUpperCase();
+
+    const colorForPhase = {
+      'idle': 'oklch(0.55 0.01 250)',
+      'connecting-mic': accent(CYAN, 0.68, 0.1),
+      'connecting-signal': accent(CYAN, 0.68, 0.1),
+      'connecting-bot': accent(CYAN, 0.68, 0.1),
+      'ready': accent(CYAN),
+      'user-speaking': accent(CYAN, 0.8, 0.17),
+      'thinking': accent(AMBER),
+      'speaking': accent(CYAN, 0.8, 0.17),
+      'interrupted': accent(AMBER),
+      'error': 'oklch(0.65 0.18 25)',
+      'ended': 'oklch(0.55 0.01 250)',
+    };
+    const statusColor = colorForPhase[phase] || 'oklch(0.6 0.01 250)';
+
+    const isTerminal = phase === 'error' || phase === 'ended';
+    const isConnectedish = !isTerminal && phase !== 'idle' && !phase.startsWith('connecting');
+    const hasTurns = s.turns.length > 0;
+    const showIdleScreen = phase === 'idle' || phase.startsWith('connecting');
+    const showReadyScreen = isConnectedish && !hasTurns;
+    const showTranscriptScreen = isConnectedish && hasTurns;
+
+    // orb visuals
+    const orbAnim = phase === 'user-speaking' || phase === 'speaking' ? 'vx-pulse-fast 0.9s ease-in-out infinite'
+      : phase === 'thinking' ? 'vx-spin-slow 2.2s linear infinite'
+      : (phase === 'ready' || phase.startsWith('connecting')) ? 'vx-pulse 3.4s ease-in-out infinite'
+      : 'none';
+
+    const orbWrapStyle = {
+      position: 'relative', width: '180px', height: '180px', borderRadius: '50%',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: `radial-gradient(circle at 50% 50%, ${statusColor.replace('oklch(', 'oklch(').replace(')', ' / 22%)')}, transparent 70%)`,
+    };
+    const orbCoreStyle = {
+      width: '92px', height: '92px', borderRadius: '50%',
+      background: `radial-gradient(circle at 38% 32%, ${statusColor.replace(')', ' / 95%)')}, ${statusColor.replace(')', ' / 55%)')} 60%, ${statusColor.replace(')', ' / 15%)')} 100%)`,
+      boxShadow: `0 0 60px ${statusColor.replace(')', ' / 35%)')}`,
+      animation: orbAnim,
+    };
+    const compactOrbWrapStyle = { ...orbWrapStyle, width: '52px', height: '52px' };
+    const compactOrbCoreStyle = { ...orbCoreStyle, width: '30px', height: '30px', boxShadow: `0 0 20px ${statusColor.replace(')', ' / 35%)')}` };
+
+    const barActive = phase === 'user-speaking' || phase === 'speaking';
+    const waveformBars = Array.from({ length: 7 }).map((_, i) => {
+      const delay = (i * 0.09).toFixed(2) + 's';
+      const base = {
+        width: '4px', borderRadius: '2px', background: statusColor,
+        height: '28px', transformOrigin: 'center', opacity: barActive ? 0.9 : 0.25,
+        animation: barActive ? `vx-bar ${0.6 + (i % 3) * 0.15}s ease-in-out infinite` : 'none',
+        animationDelay: delay,
+      };
+      return { style: base, compactStyle: { ...base, height: '16px', width: '3px' } };
+    });
+    const waveformRowStyle = { position: 'absolute', bottom: '-38px', left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: '5px', alignItems: 'center', height: '28px' };
+    const waveformRowCompactStyle = { display: 'flex', gap: '3px', alignItems: 'center', height: '16px', marginLeft: '8px' };
+
+    // turns
+    const replyModeLabel = s.replyMode === 'silent' ? 'SILENT REPLIES' : 'SPOKEN REPLIES';
+    const turns = s.turns.map(t => {
+      if (t.type === 'user') {
+        return { id: t.id, isUser: true, text: t.text, time: 'now' };
+      }
+      if (t.type === 'assistant') {
+        return {
+          id: t.id, isAssistant: true, displayText: t.displayText || '', revealing: !!t.revealing,
+          time: 'now', replyModeLabel: t.revealing || t.displayText === t.fullText ? (s.replyMode === 'silent' ? 'text' : 'voice') : '',
+        };
+      }
+      if (t.type === 'tool') {
+        return {
+          id: t.id, isTool: true, name: t.name, expanded: t.expanded,
+          statusLabel: t.done ? 'DONE' : 'RUNNING…',
+          statusDotStyle: { width: '8px', height: '8px', borderRadius: '50%', background: t.done ? accent(CYAN) : accent(AMBER), animation: t.done ? 'none' : 'vx-pulse-fast 0.8s ease-in-out infinite', flex: 'none' },
+          chevronRotate: t.expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          argsDisplay: JSON.stringify(t.args, null, 2),
+          done: t.done, result: t.result,
+          onToggle: () => this.toggleToolExpand(t.id),
+        };
+      }
+      return { id: t.id, isSystem: true, text: t.text };
+    });
+
+    const btnBase = { font: '600 11px/1 ui-monospace,monospace', letterSpacing: '0.06em', padding: '7px 11px', borderRadius: '7px', border: '1px solid oklch(1 0 0 / 12%)', background: 'oklch(0.2 0.014 250)', color: 'oklch(0.75 0.01 250)', cursor: 'pointer' };
+
+    const displayModeOptions = ['karaoke', 'captions', 'instant'].map(m => ({
+      label: m.toUpperCase(),
+      onClick: () => this.setDisplayMode(m),
+      style: {
+        ...btnBase, flex: 1, textAlign: 'center', padding: '7px 4px',
+        background: s.displayMode === m ? accent(CYAN, 0.3, 0.06) : 'oklch(0.16 0.012 250)',
+        borderColor: s.displayMode === m ? accent(CYAN, 0.5, 0.1) : 'oklch(1 0 0 / 10%)',
+        color: s.displayMode === m ? accent(CYAN, 0.88, 0.1) : 'oklch(0.6 0.01 250)',
+      }
+    }));
+
+    const metricsRows = s.metrics ? [
+      { label: 'STT', value: s.metrics.stt },
+      { label: 'LLM TTFB', value: s.metrics.ttfb },
+      { label: 'TTS first audio', value: s.metrics.tts },
+      { label: 'Total (speech→audio)', value: s.metrics.total },
+    ] : [{ label: 'No turns yet', value: '—' }];
+
+    return {
+      rootStyle: { position: 'fixed', inset: 0, overflow: 'hidden', fontFamily: 'Helvetica,"Helvetica Neue",sans-serif', background: 'oklch(0.16 0.012 250)', color: 'oklch(0.94 0.01 250)' },
+      isTerminal, isConnectedish, showIdleScreen, showReadyScreen, showTranscriptScreen,
+      statusLabel, statusColor, terminalReason: s.terminalReason,
+      orbWrapStyle, orbCoreStyle, compactOrbWrapStyle, compactOrbCoreStyle,
+      waveformBars, waveformRowStyle, waveformRowCompactStyle,
+      turns,
+      connect: this.connect, resetToIdle: this.resetToIdle, onEndClick: this.onEndClick,
+      muteLabel: s.muted ? 'UNMUTE' : 'MUTE',
+      muteButtonStyle: { ...btnBase, background: s.muted ? 'oklch(0.3 0.06 25)' : btnBase.background, color: s.muted ? 'oklch(0.85 0.05 25)' : btnBase.color },
+      metricsButtonStyle: { ...btnBase, background: s.showMetrics ? accent(CYAN, 0.3, 0.06) : btnBase.background },
+      settingsButtonStyle: { ...btnBase, background: s.showSettings ? accent(CYAN, 0.3, 0.06) : btnBase.background },
+      endButtonStyle: { ...btnBase, color: 'oklch(0.7 0.1 25)' },
+      demoButtonStyle: { ...btnBase, opacity: 0.55, fontSize: '10px' },
+      demoItemStyle: { ...btnBase, textAlign: 'left', width: '100%', fontWeight: 400, fontSize: '11.5px', letterSpacing: 0 },
+      toggleMute: this.toggleMute, toggleSettings: this.toggleSettings, toggleMetrics: this.toggleMetrics, toggleDemo: this.toggleDemo,
+      showSettings: s.showSettings, showMetrics: s.showMetrics, showDemo: s.showDemo,
+      displayModeOptions, metricsRows,
+      replyModeLabel, replyModeButtonStyle: { ...btnBase, whiteSpace: 'nowrap' }, toggleReplyMode: this.toggleReplyMode,
+      composerText: s.composerText, onComposerChange: this.onComposerChange, onComposerKeyDown: this.onComposerKeyDown,
+      composerInputStyle: { flex: 1, font: '15px/1.4 Helvetica,sans-serif', color: 'oklch(0.94 0.01 250)', background: 'oklch(0.2 0.014 250)', border: '1px solid oklch(1 0 0 / 10%)', borderRadius: '10px', padding: '11px 14px', outline: 'none' },
+      sendButtonStyle: { ...btnBase, background: accent(CYAN, 0.3, 0.06), color: accent(CYAN, 0.88, 0.1), fontSize: '12.5px', padding: '11px 18px' },
+      sendDisabled: !s.composerText.trim(),
+      sendText: this.sendText,
+      primaryButtonStyle: { font: '600 14px/1 Helvetica,sans-serif', padding: '13px 28px', borderRadius: '999px', border: 'none', background: accent(CYAN, 0.3, 0.06), color: accent(CYAN, 0.9, 0.1), cursor: 'pointer' },
+      simulateVoiceTurn: this.simulateVoiceTurn, simulateBotDeath: this.simulateBotDeath, simulateErrorState: this.simulateErrorState,
+    };
+  }
+}
+</script>
+</body>
+</html>
