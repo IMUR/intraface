@@ -2,7 +2,13 @@
 
 **Status:** Live. Browser-based conversational voice chat with the resident
 Core is deployed at `https://vox.rtr.dev/`. Full-duplex with barge-in, streaming
-TTS, and live transcript. End-of-speech to first audio typically 2-3 s.
+TTS, a React/RTVI interface, read-only agent tools, and live transcript.
+End-of-speech to first audio typically 2-3 s.
+
+**Next planned workstream (2026-07-29):** persistent memory. No backend has
+been selected and no memory code is deployed. The next session must choose the
+memory product and ownership model before implementation; see
+`docs/handoffs/2026-07-29-vox-persistent-memory.md`.
 
 This document supersedes the prior LiveKit + Pi + A2A evaluation. The
 historical Phase 1 results are preserved at the end for provenance; the
@@ -46,9 +52,10 @@ full TTS call ~1.5 s.
 | LLM | pipecat `OpenAILLMService(base_url=http://127.0.0.1:7712/v1)` → llama-server | Live; TTFB ~250-350 ms with thinking off |
 | TTS | pipecat `OpenAITTSService(base_url=http://100.64.0.3:7744/v1)` → Chatterbox streaming | Live; TTFB ~1.3-2.1 s on long responses |
 | Transcript forwarder | Custom `FrameProcessor` (2 instances — user + assistant) → WebRTC data channel | Live |
-| Browser UI | `experiments/pipecat-web-voice/static/index.html` — vanilla JS, dark theme | Live; connect button + transcript panel |
+| Browser UI | `frontend/` — React + Pipecat RTVI client, built to `frontend/dist/` | Live; phase UI, transcript, tool calls, metrics, text input |
 
-Source: `experiments/pipecat-web-voice/` (bot.py, server.py, static/index.html)
+Source: `experiments/pipecat-web-voice/` (`bot.py`, `server.py`, `tools.py`)
+and `frontend/`. The legacy vanilla client remains at `/vanilla/`.
 
 ## Two non-obvious requirements discovered during bring-up
 
@@ -78,7 +85,9 @@ they aren't rediscovered.
 - Streaming TTS (Chatterbox text-chunked into ~25-word segments, PCM chunks flushed per segment)
 - Full-duplex: barge-in enabled by default (~10 ms cutoff latency)
 - Live transcript panel in browser via WebRTC data channel
-- No persistence across disconnects — each WebRTC session starts with fresh `LLMContext`
+- No persistence across disconnects — each WebRTC session starts with fresh
+  `LLMContext`. Persistent memory is the next planned workstream, not current
+  behavior.
 
 ## Latency budget (measured 2026-07-29)
 
@@ -138,15 +147,15 @@ Original wrapper backed up at `app.py.bak.20260729-111501` on drtr.
    follow-up.
 
 4. **No persistence across disconnects.** Each WebRTC session starts with
-   fresh `LLMContext` (system prompt only). Closing the tab loses the
-   conversation. XTDB on prtr:5511 is available if persistent history
-   becomes a requirement.
+   fresh `LLMContext` (system prompt plus registered tools). Closing the tab
+   loses the conversation. Memory is now planned, but selecting Mem0, XTDB,
+   or another backend is gated on defining memory ownership because Vox has
+   no authentication or stable user ID. See the persistent-memory handoff.
 
-5. **llama-server JSON schema defect** (cross-cutting). Documented in
-   `engines.toml [defects.json_schema]`. Blocks auto-derived tool schemas
-   that include `true`/`false` JSON Schema 2020-12 values. Fix in progress
-   in a separate workstream. Does not affect the current conversational
-   voice path (no tools registered).
+5. **Historical llama-server JSON schema defect — resolved.** Tool schemas
+   and Layers 1–3 are deployed. The verification record is
+   `engines.toml [defects.ik_llama_json_schema]`; older defect text later in
+   this document is retained only for provenance.
 
 ## Cross-node deployment (per ADR 0007)
 
@@ -179,13 +188,13 @@ All criteria pass.
 
 ## Open follow-ups (priority order)
 
-1. **Agent capabilities** — tools, identity (`AGENTS.md`), self-awareness.
-   **Layer 1 (read-only cluster ops) shipped 2026-07-29.** Layers 2–5
-   (filesystem, web search, Pi delegation, modes) are designed but not yet
-   implemented — see `experiments/pipecat-web-voice/AGENTS.md` for the design.
-   See `docs/handoffs/2026-07-29-vox-agent-capabilities.md` for original scope.
-2. **Frontend improvements** — Markdown, persistence, voice selection.
-   See `docs/handoffs/2026-07-29-vox-frontend-ui.md`.
+1. **Persistent memory** — evaluate Mem0 and smaller local alternatives, then
+   implement semantic memory or another explicitly chosen memory product.
+   Identity/ownership and retention policy are required decisions. See
+   `docs/handoffs/2026-07-29-vox-persistent-memory.md`.
+2. **Remaining agent capabilities** — Layers 1–3 (cluster ops, filesystem,
+   web search) shipped 2026-07-29. Layer 4 (Pi delegation) and Layer 5
+   (modes) remain planned; see `PROGRESS.md`.
 3. **Systemd unit for the bot process** — survive reboots.
 4. **Per-chunk silence trimming** in the Chatterbox wrapper.
 5. **Streaming STT** — Parakeet is batch today; a streaming-capable endpoint
@@ -207,6 +216,13 @@ beyond what's in their handoff should be here. If it's not here, treat the
 absence as a finding and surface it.
 
 ## bot.py — current shape (verified 2026-07-29)
+
+> **Current-state correction (2026-07-29):** The shape block below records
+> the original conversational bot and is retained for provenance. Live
+> `bot.py` is 329 lines, uses `LLMContext(tools=list(vox_tools.ALL_TOOLS))`,
+> has identity/tool-first instructions, Layer 1–3 tools, tool-call filler
+> narration, and `max_completion_tokens=300`. Read live source before
+> changing lifecycle seams for memory.
 
 ```text
 experiments/pipecat-web-voice/bot.py — 205 LOC
@@ -253,18 +269,16 @@ experiments/pipecat-web-voice/bot.py — 205 LOC
     runner = WorkerRunner(handle_sigint=False)
 ```
 
-No tools registered today. `LLMContext` is constructed with default tools
-(empty). When adding tools, pass them in the `LLMContext(tools=[...])`
-constructor (see pipecat function calling docs).
-
-> **Update 2026-07-29:** Layer 1 tools are now registered. `bot.py` constructs
-> `LLMContext(tools=list(vox_tools.ALL_TOOLS))` and includes a
-> `on_function_calls_started` filler hook. See `tools.py` for the four
-> registered functions (`check_node`, `list_services`, `get_log_tail`,
-> `get_port_state`) and `AGENTS.md` for vox's identity. The shape summary
-> above reflects the pre-Layer-1 state for historical reference.
+Tools are registered through `LLMContext(tools=list(vox_tools.ALL_TOOLS))`.
+As of 2026-07-29 this includes read-only cluster, filesystem, and web-search
+tools. `AGENTS.md` and `PROGRESS.md` are the capability sources of truth.
 
 ## server.py — current shape
+
+> **Current-state correction (2026-07-29):** Live `server.py` serves the
+> React build at `/`, hashed assets at `/assets`, the vanilla fallback at
+> `/vanilla`, and the original static client at `/static`. The original block
+> below is retained for provenance.
 
 ```text
 experiments/pipecat-web-voice/server.py — 77 LOC

@@ -5,7 +5,7 @@ layers. Source of truth for what's done, what's in progress, and what's
 blocked. Companion to `experiments/pipecat-web-voice/AGENTS.md` (design)
 and `docs/handoffs/2026-07-29-vox-agent-capabilities.md` (original scope).
 
-**Last updated:** 2026-07-29 (Layer 3 web search shipped)
+**Last updated:** 2026-07-29 (Layer 4 Pi delegation shipped)
 
 ---
 
@@ -14,9 +14,13 @@ and `docs/handoffs/2026-07-29-vox-agent-capabilities.md` (original scope).
 Status: **shipped** (2026-07-29)
 
 - [x] `AGENTS.md` authored at `experiments/pipecat-web-voice/AGENTS.md`
-- [x] System prompt rewritten to enforce tool-first behavior on cluster queries
+- [x] Stable constitution moved to Pipecat's recommended
+      `OpenAILLMService.Settings(system_instruction=...)`
+- [x] Evidence policy requires tools for current cluster/project facts and
+      time-sensitive web facts without forcing tools for stable knowledge
 - [x] Self-knowledge of tools and refusal boundaries
-- [x] Model self-knowledge — system prompt now names Qwen3.6 + port + speech path (shipped 2026-07-29 after Layer 2)
+- [x] Model self-knowledge derives the configured `LLAMA_MODEL`; volatile
+      endpoint and speech-path details are no longer duplicated in the prompt
 - [ ] Voice-UX observations tracked (model misreads short phrases; brevity vs detail tension; Layer 2 path-arg imprecision; soft-refusal miss on edit requests)
 
 ## Layer 1 — Read-only cluster ops
@@ -78,14 +82,22 @@ Status: **shipped** (2026-07-29)
 
 ## Layer 4 — Pi delegation
 
-Status: **planned** (not started)
+Status: **shipped** (2026-07-29)
 
-- [ ] `delegate_to_pi(task)` running `pi --print --no-tools`
-- [ ] Per-session `--session-id` (one Pi session per WebRTC connection)
-- [ ] Length cap on Pi output (~500 chars) before LLM sees it
-- [ ] Tests added
-- [ ] Wired into `bot.py` with filler entry
-- [ ] Stronger `--no-tools` scope verification (try invoking a tool by name)
+- [x] `delegate_to_pi(task)` runs `pi --print --no-tools`
+- [x] Pi extensions, skills, context files, and prompt templates disabled
+- [x] Per-session `--session-id` (one Pi session per WebRTC connection)
+- [x] Task cap = 1,000 chars; Pi output cap = 500 chars
+- [x] Timeout, cancellation, empty-output, and non-zero-exit handling
+- [x] Mutation-shaped delegation rejected before Pi starts
+- [x] Tests added for schema, session identity, no-tools argv, mutation rejection,
+      and output truncation
+- [x] Wired into `bot.py` with non-task-specific filler entry
+- [x] Live `--no-tools` scope probe returned `NONE`
+- [x] Live delegation returned a voice-shaped response
+- [x] Same-session continuity verified (`cobalt` recalled on second call)
+- [ ] Voice latency observation: first live call took ~20s; subsequent
+      two-call continuity probe completed in ~8s total
 
 ## Layer 5 — Modes (tool subsets per session)
 
@@ -99,11 +111,28 @@ Status: **planned** (not started)
 ## Cross-cutting
 
 - [x] `engines.toml [defects.ik_llama_json_schema]` stamped resolved with verification
-- [x] Handoff's fabricated Pattern 1/2 (`FunctionCallParams`/`register_function`)
-      replaced with verified patterns and originals retained for provenance
+- [x] Handoff's incorrect `FunctionSchema` import and obsolete separate
+      registration guidance replaced with verified patterns
 - [x] Evaluation doc's schema-defect section and bot.py shape notes stamped
 - [ ] Systemd unit for bot process — survives reboots (separate workstream,
       tracked in `docs/voice-chat-evaluation.md` follow-up #3)
+
+## Persistent memory — next workstream
+
+Status: **planned** (discovery and backend selection not started)
+
+- [ ] Choose the memory product: semantic memory, conversation resume, or
+      transcript archive
+- [ ] Choose a memory ownership model; Vox currently has no authentication or
+      stable cross-session user identifier
+- [ ] Evaluate current self-hosted Mem0 against a narrow local store and at
+      most one other credible option
+- [ ] Record the backend decision and retention policy
+- [ ] Implement behind an app-owned `MemoryStore` boundary
+- [ ] Verify cross-session recall, subject isolation, deletion, fail-open
+      behavior, data exclusions, and latency
+- [x] Next-session handoff written:
+      `docs/handoffs/2026-07-29-vox-persistent-memory.md`
 
 ## Frontend swap (2026-07-29)
 

@@ -19,6 +19,7 @@ import asyncio
 import inspect
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 # Allow importing from the parent directory.
@@ -35,16 +36,18 @@ class FakeParams:
     tools don't use anything else from params.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, app_resources=None, arguments=None) -> None:
         self.result: dict | None = None
+        self.app_resources = app_resources
+        self.arguments = arguments or {}
 
     async def result_callback(self, result) -> None:
         self.result = result
 
 
-async def run_tool(tool_fn, **kwargs) -> dict:
+async def run_tool(tool_fn, *, app_resources=None, **kwargs) -> dict:
     """Invoke a tool function with a FakeParams and return the captured result."""
-    params = FakeParams()
+    params = FakeParams(app_resources=app_resources)
     await tool_fn(params=params, **kwargs)
     assert params.result is not None, f"{tool_fn.__name__} produced no result"
     return params.result
@@ -402,6 +405,94 @@ async def main() -> int:
     )
     if not ok:
         failures.append("web_search(bad-intent)")
+
+    # =========================================================
+    # Strict schemas + Layer 4 — Pi delegation
+    # =========================================================
+
+    print("\n[29] constrained arguments are encoded in model-visible schemas")
+    schemas = {
+        definition.name: definition
+        for definition in tools.TOOL_DEFINITIONS
+        if hasattr(definition, "properties")
+    }
+    for name in ("check_node", "list_services", "get_log_tail", "get_port_state"):
+        enum = schemas[name].properties["node"].get("enum")
+        _check(enum == list(tools.NODES), f"{name}.node has strict enum") or failures.append(
+            f"{name}-node-enum"
+        )
+    intent_enum = schemas["web_search"].properties["intent"].get("enum")
+    _check(
+        intent_enum == list(tools.SEARCH_INTENTS),
+        "web_search.intent has strict enum",
+    ) or failures.append("web-search-intent-enum")
+    schema_params = FakeParams(arguments={"node": "prtr"})
+    await schemas["check_node"].handler(schema_params)
+    _check(
+        schema_params.result is not None and schema_params.result.get("reachable") is True,
+        "FunctionSchema handler dispatches to direct implementation",
+    ) or failures.append("schema-handler-dispatch")
+
+    print("\n[30] delegate_to_pi rejects calls without a per-session identity")
+    r = await run_tool(tools.delegate_to_pi, task="Explain the tradeoff.")
+    _check("session identity" in r.get("error", ""), "missing identity rejected") or failures.append(
+        "delegate-missing-session"
+    )
+    r = await run_tool(
+        tools.delegate_to_pi,
+        app_resources={"pi_session_id": "vox-" + "a" * 32},
+        task="Edit bot.py and make the responses longer.",
+    )
+    _check("mutation" in r.get("error", ""), "mutation delegation rejected") or failures.append(
+        "delegate-mutation"
+    )
+
+    print("\n[31] delegate_to_pi disables tools and caps returned text")
+    captured_argv: tuple[str, ...] = ()
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"x" * 700, b""
+
+        def kill(self):
+            pass
+
+        async def wait(self):
+            pass
+
+    async def fake_create_subprocess_exec(*argv, **_kwargs):
+        nonlocal captured_argv
+        captured_argv = argv
+        return FakeProcess()
+
+    original_create = tools.asyncio.create_subprocess_exec
+    original_session_dir = tools.PI_SESSION_DIR
+    try:
+        with tempfile.TemporaryDirectory() as session_dir:
+            tools.PI_SESSION_DIR = session_dir
+            tools.asyncio.create_subprocess_exec = fake_create_subprocess_exec
+            r = await run_tool(
+                tools.delegate_to_pi,
+                app_resources={"pi_session_id": "vox-" + "a" * 32},
+                task="Compare two safe designs.",
+            )
+    finally:
+        tools.asyncio.create_subprocess_exec = original_create
+        tools.PI_SESSION_DIR = original_session_dir
+
+    ok = (
+        _check("--no-tools" in captured_argv, "Pi launched with --no-tools")
+        and _check("--session-id" in captured_argv, "Pi launched with --session-id")
+        and _check(r.get("truncated") is True, "long Pi output marked truncated")
+        and _check(
+            len(r.get("response", "")) <= tools._MAX_PI_OUTPUT_CHARS,
+            "Pi output capped before reaching the LLM",
+        )
+    )
+    if not ok:
+        failures.append("delegate-safety")
 
     # Summary
     print("\n" + "=" * 60)

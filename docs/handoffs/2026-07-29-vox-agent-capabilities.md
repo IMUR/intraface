@@ -36,11 +36,11 @@ voice-shaped queries ("is drtr up?" → `check_node`, "what's listening on
 prtr?" → `get_port_state`, etc.) and declines to call tools for non-cluster
 questions. See test logs in commit history.
 
-**The expanded scope beyond v1** (Layer 2 filesystem, Layer 3 web search,
-Layer 4 Pi delegation, Layer 5 modes) is designed but **not yet
-implemented**. See `experiments/pipecat-web-voice/AGENTS.md` for the design
-and intended sequencing. Layer 1 is the proving ground — do not start
-Layer 2+ until Layer 1 is stable and patterns recur.
+**Current status:** Layers 0–4 are implemented. This includes allowlisted
+filesystem tools, SearXNG web search, strict model-visible enums for constrained
+arguments, and per-WebRTC-session Pi delegation with all Pi tools disabled.
+Layer 5 modes remains planned. See `experiments/pipecat-web-voice/AGENTS.md`
+and the root `PROGRESS.md` for the live capability inventory.
 
 ### Corrections to the original handoff (below)
 
@@ -52,8 +52,9 @@ The original Patterns 1 and 2 in the next section reference APIs that do
   (the symbol exists, the import path in the original Pattern 1 source
   snippet was correct, but Pattern 2's `from pipecat.services.llm_service
   import FunctionSchema` is **wrong** — that class is not there).
-- `register_function` does not exist in pipecat 1.6.0. Tool handlers are
-  registered automatically when the function is passed to `LLMContext(tools=...)`.
+- A classic `register_function` API exists in pipecat 1.6.0, but it is not
+  needed here. Direct functions and handler-carrying `FunctionSchema` objects
+  register automatically when passed to `LLMContext(tools=...)`.
 - The schema-defect section below is **resolved** as of 2026-07-29. See
   `engines.toml [defects.ik_llama_json_schema]` for verification details.
 
@@ -65,7 +66,9 @@ provenance.
 
 ## Current state — what's deployed
 
-The voice bot at `experiments/pipecat-web-voice/bot.py` is purely conversational. No tools, no identity beyond a one-line system prompt, no awareness of the cluster it runs on.
+The voice bot at `experiments/pipecat-web-voice/bot.py` has a durable
+`system_instruction` and Layers 1–4 registered: read-only cluster inspection,
+allowlisted filesystem reads, web search, and tool-disabled Pi delegation.
 
 **Working today:**
 - WebRTC voice chat via pipecat SmallWebRTCTransport
@@ -111,7 +114,8 @@ objects) directly to `LLMContext(tools=[...])`. The function's first
 parameter must be named `params` and typed as `FunctionCallParams`;
 pipecat's `DirectFunctionWrapper` reads the rest of the signature and the
 docstring to auto-derive the JSON Schema sent to the model. Handlers are
-registered automatically — there is no `register_function` call in 1.6.0.
+registered automatically, so this implementation does not need a separate
+`register_function` call.
 
 **Direct function (recommended — what `tools.py` uses):**
 
@@ -194,17 +198,16 @@ original handoff claimed).
 
 ### Original patterns (retained for provenance — DO NOT USE)
 
-The two patterns below appeared in the original handoff. They reference
-APIs that don't exist in pipecat 1.6.0 and are kept here only so future
-readers can see what was wrong. Use the verified patterns above.
+The two patterns below appeared in the original handoff. One used obsolete
+separate-registration guidance and the other used an invalid import. They are
+kept so future readers can see what was wrong. Use the verified patterns above.
 
 <details>
-<summary>Original Pattern 1 (fabricated — does not work)</summary>
+<summary>Original Pattern 1 (obsolete separate-registration guidance)</summary>
 
 ```python
-# BROKEN: `register_function` does not exist in pipecat 1.6.0.
-# BROKEN: `LLMContext(tools=[check_node])` shape is correct, but the
-#         surrounding Pattern 1 implied a separate registration step.
+# `LLMContext(tools=[check_node])` is sufficient. Do not add a redundant
+# classic `register_function` step for this direct function.
 from pipecat.services.llm_service import FunctionCallParams  # this import is OK
 
 async def check_node(params: FunctionCallParams, node: str):

@@ -18,6 +18,7 @@ Voice-shape contract:
 """
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -26,6 +27,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from pipecat.adapters.schemas.direct_function import DirectFunctionWrapper
+from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.services.llm_service import FunctionCallParams
 
 # Cluster topology (mirror of docs/voice-chat-evaluation.md → Reference).
@@ -543,10 +546,9 @@ async def _local(*argv: str, timeout: int = 8) -> tuple[bool, str]:
 async def read_file(params: FunctionCallParams, path: str) -> None:
     """Read a text file from the local filesystem. Read-only, size-capped.
 
-    Use for "what's in X?" or "show me bot.py" type questions. Returns the
-    file contents (up to 4 KiB) plus the total byte count so the spoken
-    summary can say "the file is 12 KiB, here's the first part" rather
-    than implying the whole thing was read.
+    Use only when the exact path is known. If the user supplies a filename
+    without its directory, call find_files first and then read the resolved
+    path. Returns the file contents (up to 4 KiB) plus the total byte count.
 
     Args:
         path: File path. Relative paths resolve against $HOME. Only paths
@@ -755,8 +757,6 @@ async def grep_files(
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://sch.rtr.dev/search")
 
 # Intent → engine recipes, ported from ~/.pi/agent/AGENTS.md.
-# Adding a new intent is a one-line change here — the model gets the enum
-# automatically via the web_search function signature.
 SEARCH_INTENTS: dict[str, str] = {
     "general":  "",  # no filter — SearXNG picks engines
     "code":     "stackoverflow,github,superuser,askubuntu",
@@ -881,6 +881,124 @@ def _extract_domain(url: str) -> str:
         return url
 
 
+# ---------------------------------------------------------------------------
+# Layer 4 — Read-only Pi delegation
+# ---------------------------------------------------------------------------
+
+PI_CWD = os.path.expanduser(os.getenv("VOX_PI_CWD", "~/prj/intraface"))
+PI_SESSION_DIR = os.path.expanduser(
+    os.getenv("VOX_PI_SESSION_DIR", "~/.intraface/state/vox-pi-sessions")
+)
+_PI_TIMEOUT_SECS = 30
+_MAX_PI_TASK_CHARS = 1_000
+_MAX_PI_OUTPUT_CHARS = 500
+_PI_SESSION_ID_RE = re.compile(r"^vox-[a-f0-9]{32}$")
+_MUTATION_REQUEST_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:edit|write|delete|remove|restart|start|stop|modify|create)\b",
+    re.IGNORECASE,
+)
+_PI_SYSTEM_PROMPT = (
+    "You are a reasoning worker delegated to by Vox, a realtime voice agent. "
+    "You have no tools and must not claim to inspect files, run commands, or "
+    "change state. Answer the task using only the supplied conversation and "
+    "your existing knowledge. Return plain spoken text with no Markdown, URLs, "
+    "headings, or lists."
+)
+
+
+async def delegate_to_pi(params: FunctionCallParams, task: str) -> None:
+    """Delegate a bounded reasoning task to Pi with every Pi tool disabled.
+
+    Use when the user explicitly asks for deeper reasoning or when a request
+    needs synthesis beyond a direct conversational answer. Do not use for
+    cluster state, project files, web lookup, or mutation requests; dedicated
+    tools and refusal policy handle those. Pi receives no tools, and its output
+    is capped before returning to the voice model.
+
+    Args:
+        task: Self-contained reasoning task for Pi, no more than 1000 characters.
+    """
+    task = task.strip()
+    if not task:
+        await params.result_callback({"error": "empty delegation task"})
+        return
+    if _MUTATION_REQUEST_RE.search(task):
+        await params.result_callback({
+            "error": "mutation requests cannot be delegated; Pi has no tools"
+        })
+        return
+    if len(task) > _MAX_PI_TASK_CHARS:
+        await params.result_callback({
+            "error": f"delegation task exceeds {_MAX_PI_TASK_CHARS} characters"
+        })
+        return
+
+    resources = params.app_resources if isinstance(params.app_resources, dict) else {}
+    session_id = resources.get("pi_session_id", "")
+    if not isinstance(session_id, str) or not _PI_SESSION_ID_RE.fullmatch(session_id):
+        await params.result_callback({"error": "missing or invalid Pi session identity"})
+        return
+
+    try:
+        os.makedirs(PI_SESSION_DIR, mode=0o700, exist_ok=True)
+        process = await asyncio.create_subprocess_exec(
+            "pi",
+            "--print",
+            "--no-tools",
+            "--no-context-files",
+            "--no-extensions",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--system-prompt",
+            _PI_SYSTEM_PROMPT,
+            "--session-id",
+            session_id,
+            "--session-dir",
+            PI_SESSION_DIR,
+            task,
+            cwd=PI_CWD,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except (FileNotFoundError, OSError) as error:
+        await params.result_callback({"error": f"Pi could not start: {error}"})
+        return
+
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=_PI_TIMEOUT_SECS,
+        )
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        await params.result_callback({"error": f"Pi timed out after {_PI_TIMEOUT_SECS}s"})
+        return
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
+
+    output = stdout.decode(errors="replace").strip()
+    error = stderr.decode(errors="replace").strip()
+    if process.returncode != 0:
+        detail = (error or output or f"exit {process.returncode}")[:200]
+        await params.result_callback({"error": f"Pi failed: {detail}"})
+        return
+    if not output:
+        await params.result_callback({"error": "Pi returned no text"})
+        return
+
+    truncated = len(output) > _MAX_PI_OUTPUT_CHARS
+    if truncated:
+        output = f"{output[:_MAX_PI_OUTPUT_CHARS - 1].rstrip()}…"
+    await params.result_callback({
+        "response": output,
+        "truncated": truncated,
+    })
+
+
 ALL_TOOLS: tuple[Any, ...] = (
     # Layer 1 — cluster ops
     check_node, list_services, get_log_tail, get_port_state,
@@ -888,4 +1006,65 @@ ALL_TOOLS: tuple[Any, ...] = (
     read_file, list_directory, find_files, grep_files,
     # Layer 3 — web search
     web_search,
+    # Layer 4 — reasoning delegation
+    delegate_to_pi,
+)
+
+
+def _schema_with_constraints(
+    function,
+    property_constraints: dict[str, dict[str, Any]],
+) -> FunctionSchema:
+    """Derive a tool schema, then add constraints unsupported by direct tools."""
+    derived = DirectFunctionWrapper(function).to_function_schema()
+    properties = {
+        name: {
+            **schema,
+            **property_constraints.get(name, {}),
+        }
+        for name, schema in derived.properties.items()
+    }
+    accepted_arguments = set(inspect.signature(function).parameters) - {"params"}
+
+    async def handler(params: FunctionCallParams) -> None:
+        arguments = {
+            name: value
+            for name, value in params.arguments.items()
+            if name in accepted_arguments
+        }
+        await function(params=params, **arguments)
+
+    return FunctionSchema(
+        name=derived.name,
+        description=derived.description,
+        properties=properties,
+        required=derived.required,
+        handler=handler,
+    )
+
+
+_NODE_CONSTRAINT = {"node": {"enum": list(NODES)}}
+TOOL_DEFINITIONS: tuple[Any, ...] = (
+    _schema_with_constraints(check_node, _NODE_CONSTRAINT),
+    _schema_with_constraints(list_services, _NODE_CONSTRAINT),
+    _schema_with_constraints(
+        get_log_tail,
+        {
+            **_NODE_CONSTRAINT,
+            "lines": {"minimum": 1, "maximum": 50},
+        },
+    ),
+    _schema_with_constraints(get_port_state, _NODE_CONSTRAINT),
+    read_file,
+    list_directory,
+    find_files,
+    grep_files,
+    _schema_with_constraints(
+        web_search,
+        {"intent": {"enum": list(SEARCH_INTENTS)}},
+    ),
+    _schema_with_constraints(
+        delegate_to_pi,
+        {"task": {"minLength": 1, "maxLength": _MAX_PI_TASK_CHARS}},
+    ),
 )

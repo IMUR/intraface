@@ -129,15 +129,21 @@ The model infers intent from query shape — verified live to pick `docs`
 for "FastAPI dependency injection documentation" and `research` for
 "recent benchmarks."
 
+### `delegate_to_pi(task)` — Layer 4 (shipped 2026-07-29)
+
+Delegates an explicitly requested reasoning task to Pi. Pi runs with
+`--no-tools`, no extensions, no skills, no context files, and a dedicated
+voice-shaped system prompt. Each WebRTC connection receives a unique Pi
+session ID, so consecutive delegations retain context within that voice
+session without sharing it across users. Tasks are capped at 1,000 characters;
+results are capped at 500 characters before returning to the resident model.
+Mutation-shaped tasks are rejected before Pi starts.
+
 ## What vox can do (planned — not yet registered)
 
 These capabilities are designed but unimplemented. When they land, this
 section moves above and the section is rewritten.
 
-- **Layer 4 — Pi delegation.** `delegate_to_pi(task)` running
-  `pi --print --no-tools` so Pi exposes no mutation surface. Vox is the
-  router, Pi is the expert Unit. Per-session Pi `--session-id` so Pi retains
-  context within a single voice chat.
 - **Layer 5 — Modes.** Tool subsets per session, selected via URL parameter
   or RTVI client-message from the React frontend
   (e.g., `vox.rtr.dev/?mode=cluster` or a mode-picker button). Default
