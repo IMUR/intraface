@@ -36,6 +36,13 @@ const MODEL_PATH =
     "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
   );
 const LLAMA_CLI = process.env.LLAMA_CLI ?? "llama-cli";
+// ADR 0008: prefer warm CPU llama-server on :7713.
+// Set UNIT_SERVER_URL=0 (or "off") to force llama-cli subprocess.
+const _unitUrlRaw = process.env.UNIT_SERVER_URL ?? "http://127.0.0.1:7713";
+const UNIT_SERVER_URL =
+  _unitUrlRaw === "0" || _unitUrlRaw.toLowerCase() === "off"
+    ? ""
+    : _unitUrlRaw.replace(/\/$/, "");
 
 // ---- Budget & timing constants ------------------------------------------
 // LFM2.5 context ceiling.
@@ -50,8 +57,10 @@ const CHARS_PER_TOKEN = 3.5;
 //   llama-bench -m <model> -p 8192 -n 128 -ngl 0
 const PREFILL_TPS = 120;
 const DECODE_TPS = 20;
-const LOAD_OVERHEAD_S = 20; // model load + process spawn slack (cold start)
+// Warm server (ADR 0008) has no per-call load; subprocess still pays this.
+const LOAD_OVERHEAD_S = UNIT_SERVER_URL ? 2 : 20;
 const TIMEOUT_CAP_MS = 600_000;
+const GRAMMAR_PATH = path.join(__dirname, "grammar.gbnf");
 
 const approxTokens = (s: string) => Math.ceil(s.length / CHARS_PER_TOKEN);
 
@@ -188,19 +197,24 @@ export async function extract(
   // runtime constraint. Keep grammar.gbnf and schema.ts's MODEL_OUTPUT_SCHEMA
   // in sync by hand; that sync is the one piece of debt this fallback
   // introduces. Revisit when llama.cpp updates.
-  const args = [
-    "-m", MODEL_PATH,
-    "-c", String(ctx),
-    "-n", String(N_PREDICT),
-    "-ngl", "0",
-    "-st",
-    "--log-disable",
-    "--no-display-prompt",
-    "--grammar-file", path.join(__dirname, "grammar.gbnf"),
-    "-p", prompt,
-  ];
+  const grammar = fs.readFileSync(GRAMMAR_PATH, "utf8");
+  let stdout: string;
+  let substrate: string;
 
-  const stdout = await runLlama(args, timeoutMs);
+  if (UNIT_SERVER_URL) {
+    try {
+      stdout = await runUnitServer(prompt, grammar, ctx, timeoutMs);
+      substrate = "llama-server-cpu:7713";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`extract: unit server failed (${msg}); falling back to llama-cli`);
+      stdout = await runLlamaCli(prompt, ctx, timeoutMs);
+      substrate = "llama-cli-cpu-fallback";
+    }
+  } else {
+    stdout = await runLlamaCli(prompt, ctx, timeoutMs);
+    substrate = "llama-cli-cpu";
+  }
 
   const jsonMatch = stdout.trim().match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
@@ -228,7 +242,7 @@ export async function extract(
       end_line: to,
       content_sha256: createHash("sha256").update(content).digest("hex"),
       moment: new Date().toISOString(),
-      executor: "extract@LFM2.5-1.2B-Instruct-Q4_K_M/llama-cli-cpu",
+      executor: `extract@LFM2.5-1.2B-Instruct-Q4_K_M/${substrate}`,
     },
     verification: {
       total_items: all.length,
@@ -236,6 +250,56 @@ export async function extract(
       unverified: all.length - verifiedCount,
     },
   };
+}
+
+async function runUnitServer(
+  prompt: string,
+  grammar: string,
+  ctx: number,
+  timeoutMs: number,
+): Promise<string> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${UNIT_SERVER_URL}/completion`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: ac.signal,
+      body: JSON.stringify({
+        prompt,
+        n_predict: N_PREDICT,
+        n_ctx: ctx,
+        temperature: 0,
+        grammar,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 500)}`);
+    }
+    const data = (await res.json()) as { content?: string };
+    if (typeof data.content !== "string") {
+      throw new Error("completion response missing content");
+    }
+    return data.content;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function runLlamaCli(prompt: string, ctx: number, timeoutMs: number): Promise<string> {
+  const args = [
+    "-m", MODEL_PATH,
+    "-c", String(ctx),
+    "-n", String(N_PREDICT),
+    "-ngl", "0",
+    "-st",
+    "--log-disable",
+    "--no-display-prompt",
+    "--grammar-file", GRAMMAR_PATH,
+    "-p", prompt,
+  ];
+  return runLlama(args, timeoutMs);
 }
 
 function runLlama(args: string[], timeoutMs: number): Promise<string> {

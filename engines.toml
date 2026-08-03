@@ -11,7 +11,19 @@
 #   paste the full hash below
 #   update `pin_date`
 
-# ----- Substrate for the Core (resident model: GLM-4.7-Flash) -----
+# ----- Substrate for the Core (model under evaluation — see docs/core-model-baselines/) -----
+#
+# The Core model is deliberately NOT pinned here. Candidates are evaluated
+# under docs/core-model-baselines/, and the Core must remain swappable even
+# after one is chosen. Server-style inference (single resident model) is a
+# deliberate efficiency choice; the accepted cost is no hot-swap —
+# "swapping the Core" means restarting llama-server with a different `-m`.
+#
+# Canonical serve command (swap = change -m, restart):
+#   build/bin/llama-server -m <model.gguf> \
+#     --host 127.0.0.1 --port 7712 \
+#     -c 262144 -np 1 -ngl 99 --n-cpu-moe 4 \
+#     --jinja --reasoning-format deepseek
 
 [engines.ik_llama_cpp]
 role              = "core"                                            # serves the Core
@@ -22,10 +34,17 @@ pinned_commit     = "86d8e9a13c4d6e6fead9c9489ade4b0d283afc53"        # main, 20
 pin_date          = "2026-07-06"
 binary            = "llama-server"
 binary_relpath    = "build/bin/llama-server"
-purpose           = "Serves the Core model (GLM-4.7-Flash) over HTTP on 127.0.0.1:7712."
+purpose           = "Serves the current Core candidate over HTTP on 127.0.0.1:7712. Model NOT pinned; swap by restart (-m) per the canonical command in the header above."
 build_notes       = "CUDA build. Run `llama-bench` after rebuild to confirm."
 
-# ----- Substrate for Units (spawned per-call: extract, future units) -----
+# ----- Substrate for Units (ADR 0008: warm CPU server + subprocess fallback) -----
+#
+# Canonical warm serve (default Unit model; CPU-only):
+#   CUDA_VISIBLE_DEVICES= build/bin/llama-server \
+#     -m ~/.intraface/models/unit/lfm2.5-1.2b-instruct/LFM2.5-1.2B-Instruct-Q4_K_M.gguf \
+#     --host 127.0.0.1 --port 7713 -c 32768 -ngl 0
+# Helper: scripts/unit-server.sh
+# User unit: ~/.config/systemd/user/intraface-unit-server.service
 
 [engines.llama_cpp]
 role              = "unit"                                            # serves Units
@@ -34,10 +53,12 @@ mirror            = "ssh://git@git.ism.la:6666/rtr/llama.cpp.git"
 checkout_path     = "/home/prtr/prj/llama.cpp"
 pinned_commit     = "a2d90e887ac0f79accaa095f30a71a907f7f3536"        # main, 2026-07-06
 pin_date          = "2026-07-06"
-binary            = "llama-cli"
-binary_relpath    = "build/bin/llama-cli"
-purpose           = "Per-call SLM inference for Units (extract, future). Spawned via argv-array, never sh -c."
-build_notes       = "CPU-only is sufficient for Units — see `extract.ts` CUDA_VISIBLE_DEVICES=\"\" discipline."
+binary            = "llama-server"                                    # warm default (ADR 0008)
+binary_cli        = "llama-cli"                                       # ADR 0003 fallback
+binary_relpath    = "build/bin/llama-server"
+binary_cli_relpath = "build/bin/llama-cli"
+purpose           = "CPU Unit inference: warm llama-server on 127.0.0.1:7713; llama-cli subprocess fallback."
+build_notes       = "CPU-only for Units — CUDA_VISIBLE_DEVICES= empty. Do not use Ollama :7711."
 
 # ----- Known defects at pinned commits (do not re-litigate without re-testing) -----
 
