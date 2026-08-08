@@ -51,6 +51,13 @@ Last live-state verification: **2026-07-15**
 - No verified-good baseline will be created unless ADR 0006 is
   superseded
 
+## Rollback
+
+- Procedure and known-good snapshot:
+  `docs/core-model-baselines/rollback-runbook.md`
+- Env backup of the resident profile:
+  `~/.intraface/state/core-server.env.known-good-2026-08-07`
+
 ## Conventions
 
 - A **baseline** records a verified launch and measured runtime profile.

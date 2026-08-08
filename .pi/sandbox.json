@@ -1,0 +1,15 @@
+{
+  "filesystem": {
+    "allowWrite": [
+      "/home/prtr/.intraface/state/core-server.env",
+      "/home/prtr/.config/systemd/user/intraface-core.service",
+      "/home/prtr/prj/intraface/docs/core-model-baselines/rollback-runbook.md",
+      "/home/prtr/prj/intraface/docs/core-model-baselines/README.md"
+    ]
+  },
+  "network": {
+    "allowedDomains": [
+      "huggingface.co"
+    ]
+  }
+}

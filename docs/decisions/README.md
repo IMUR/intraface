@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Last reviewed against live state: **2026-08-01**
+Last reviewed against live state: **2026-08-03**
 
 | ADR | Status | Current meaning |
 |---|---|---|
@@ -12,16 +12,28 @@ Last reviewed against live state: **2026-08-01**
 | [0006](0006-reject-fun-audio-chat-as-core.md) | Accepted | FAC rejected; modular LiveKit/Parakeet/Pi/Chatterbox voice direction |
 | [0007](0007-explicit-per-node-runtime-deployment.md) | Accepted | Canonical source on prtr; explicit copied/installed runtimes on other nodes |
 | [0008](0008-unit-cpu-runtime-mainstream-llama.md) | Accepted | Unit CPU runtime = warm mainstream llama-server `:7713`; Ollama out |
+| [0009](0009-core-as-systemd-user-service.md) | Accepted | Core runs as `intraface-core.service` with `core-server.env`; linger enabled |
+| [0010](0010-drtr-protext-services-wildcard-bind.md) | Accepted | drtr Protext llama services rebound `127.0.0.1` → `0.0.0.0` for cluster access |
+
+Non-ADR evaluation records: [localai-sglang-evaluation.md](../localai-sglang-evaluation.md),
+[trt-llm-postmortem.md](../trt-llm-postmortem.md).
 
 ## Current architecture facts
 
-- Resident Core: Qwen3.6 Uncensored Aggressive Q6_K_P, dual GPU, 262K, `:7712`.
-- Unit default: LFM2.5-1.2B-Instruct on warm CPU `llama-server` `:7713`.
-- Ollama `:7711` is leftover previous-hardware config — not Unit substrate.
+- Resident Core: Qwen3.6 Uncensored Aggressive Q6_K_P, dual GPU, 262K,
+  `:7712`, managed by `intraface-core.service` (ADR 0009).
+- Unit default: LFM2.5-1.2B-Instruct on warm CPU `llama-server` `:7713`
+  (`intraface-unit-server.service`, ADR 0008).
+- drtr Protext llama stack (embed/VL/extract/summarize on
+  `7755`/`7764`/`7765`/`7766`) bound `0.0.0.0` — cluster-reachable
+  (ADR 0010). Voice STT/TTS on `:7733`/`:7744`.
+- Ollama `:7711` is leftover previous-hardware config — not Unit
+  substrate.
+- LocalAI and SGLang evaluated and rejected as substrate
+  (see localai-sglang-evaluation.md).
 - Pi and Qwen run on prtr.
 - LiveKit voice client runs on trtr with local microphone/speaker and
   Silero VAD.
-- Parakeet STT and Chatterbox TTS run on drtr.
 - Fun-Audio-Chat remains only as rejected-candidate evidence.
 
 Historical ADR context is preserved even when operational facts later
