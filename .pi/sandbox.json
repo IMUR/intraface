@@ -1,10 +1,28 @@
 {
+  "enabled": false,
   "filesystem": {
     "allowWrite": [
       "/home/prtr/.intraface/state/core-server.env",
       "/home/prtr/.config/systemd/user/intraface-core.service",
       "/home/prtr/prj/intraface/docs/core-model-baselines/rollback-runbook.md",
-      "/home/prtr/prj/intraface/docs/core-model-baselines/README.md"
+      "/home/prtr/prj/intraface/docs/core-model-baselines/README.md",
+      "/home/prtr/.config/systemd/user/llama-embed-bge-m3.service",
+      "/home/prtr/.config/systemd/user/llama-embed-colbert.service",
+      "/home/prtr/.config/systemd/user/llama-embed-lfm25.service",
+      "/home/prtr/prj/intraface/servers/lfm25-encoder/server.py",
+      "/home/prtr/.config/systemd/user/lfm25-encoder.service",
+      "/home/prtr/.config/systemd/user/llama-decide.service",
+      "/home/prtr/.config/systemd/user/llama-decide-8b.service",
+      "/tmp/executor-pipecat-arch.md",
+      "/home/prtr/prj/intraface/primecat.md",
+      "/home/prtr/.intraface/state/core-server-qwen38.env",
+      "/home/prtr/.config/systemd/user/intraface-core-qwen38.service"
+    ],
+    "allowRead": [
+      "/home/prtr/.agents/skills/rtr-ops/SKILL.md",
+      "/tmp/pi-github-repos/PrimeIntellect-ai/prime-agent/packages/coding-agent/docs/rlm.md",
+      "/tmp/pi-github-repos/PrimeIntellect-ai/prime-agent/packages/agent/src/agent-loop.ts",
+      "/home/prtr/prj/intraface/charter.md"
     ]
   },
   "network": {
