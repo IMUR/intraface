@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "entries": {
+    "topology/peer-seq": {
+      "key": "topology/peer-seq",
+      "value": {
+        "format": 1,
+        "next": 2
+      },
+      "version": 2,
+      "updatedAt": 1790170515948,
+      "updatedBy": {
+        "id": "session:01a0ce77-686c-7446-b259-8b5cff826d13",
+        "name": "main",
+        "kind": "main",
+        "sessionId": "01a0ce77-686c-7446-b259-8b5cff826d13"
+      }
+    }
+  },
+  "versions": {
+    "topology/peer-seq": 2,
+    "sessions/01a0b8e2-18d5-76f1-ac09-ba855fff302c": 429,
+    "topology/participants/f8c7e05cb1a19b9a4296f3669cbf30c650332a71aeead7a2482d2c00ac7af798": 430,
+    "topology/hosts/f8c7e05cb1a19b9a4296f3669cbf30c650332a71aeead7a2482d2c00ac7af798": 430,
+    "sessions/01a0ce77-686c-7446-b259-8b5cff826d13": 1454,
+    "topology/participants/b72d37188ab3b4e0fbde24b8285a12d41af67f72eda3dec92ec2752f2d01678d": 1455,
+    "topology/hosts/b72d37188ab3b4e0fbde24b8285a12d41af67f72eda3dec92ec2752f2d01678d": 1455
+  },
+  "tombstoneOrder": [
+    "sessions/01a0b8e2-18d5-76f1-ac09-ba855fff302c",
+    "topology/participants/f8c7e05cb1a19b9a4296f3669cbf30c650332a71aeead7a2482d2c00ac7af798",
+    "topology/hosts/f8c7e05cb1a19b9a4296f3669cbf30c650332a71aeead7a2482d2c00ac7af798",
+    "sessions/01a0ce77-686c-7446-b259-8b5cff826d13",
+    "topology/participants/b72d37188ab3b4e0fbde24b8285a12d41af67f72eda3dec92ec2752f2d01678d",
+    "topology/hosts/b72d37188ab3b4e0fbde24b8285a12d41af67f72eda3dec92ec2752f2d01678d"
+  ]
+}
